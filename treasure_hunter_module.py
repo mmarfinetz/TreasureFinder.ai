@@ -168,31 +168,62 @@ except ImportError:
 try:
     import ee
     EE_AVAILABLE = False
-    
+
     # Try multiple initialization methods
     project_id = os.environ.get('GEE_PROJECT_ID')
-    
+
+    # Optional service account credentials
+    credentials = None
+    service_json = os.environ.get('GEE_SERVICE_ACCOUNT_JSON')
+    credentials_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+    if service_json:
+        try:
+            info = json.loads(service_json)
+            sa_email = info.get('client_email')
+            credentials = ee.ServiceAccountCredentials(sa_email, key_data=service_json)
+        except Exception as cred_err:
+            print(f"⚠️ Failed to load GEE_SERVICE_ACCOUNT_JSON credentials: {cred_err}")
+    elif credentials_path:
+        try:
+            with open(credentials_path) as f:
+                key_data = f.read()
+            info = json.loads(key_data)
+            sa_email = info.get('client_email')
+            credentials = ee.ServiceAccountCredentials(sa_email, key_data=key_data)
+        except Exception as cred_err:
+            print(f"⚠️ Failed to load GOOGLE_APPLICATION_CREDENTIALS: {cred_err}")
+
     if project_id:
         # Method 1: Initialize with project ID
         try:
-            ee.Initialize(project=project_id)
+            if credentials:
+                ee.Initialize(credentials=credentials, project=project_id)
+            else:
+                ee.Initialize(project=project_id)
             EE_AVAILABLE = True
             print(f"✅ Earth Engine initialized with project: {project_id}")
         except Exception as e1:
-            # Method 2: Try authentication first, then initialize
+            # Method 2: Authenticate then initialize
             try:
-                if IN_COLAB:
-                    ee.Authenticate()
-                ee.Initialize(project=project_id)
+                ee.Authenticate()
+                if credentials:
+                    ee.Initialize(credentials=credentials, project=project_id)
+                else:
+                    ee.Initialize(project=project_id)
                 EE_AVAILABLE = True
                 print(f"✅ Earth Engine initialized after authentication with project: {project_id}")
             except Exception as e2:
                 # Method 3: Try without project ID (uses default)
                 try:
-                    ee.Initialize()
+                    if credentials:
+                        ee.Initialize(credentials=credentials)
+                    else:
+                        ee.Initialize()
                     EE_AVAILABLE = True
                     print(f"✅ Earth Engine initialized with default configuration")
                 except Exception as e3:
+                    warnings.warn("Earth Engine authentication and initialization failed.")
+                    EE_AVAILABLE = False
                     print(f"⚠️ Earth Engine initialization failed:")
                     print(f"   Method 1 (direct): {e1}")
                     print(f"   Method 2 (with auth): {e2}")
@@ -200,15 +231,27 @@ try:
     else:
         # No project ID, try default initialization
         try:
-            if IN_COLAB:
-                ee.Authenticate()
-            ee.Initialize()
+            if credentials:
+                ee.Initialize(credentials=credentials)
+            else:
+                ee.Initialize()
             EE_AVAILABLE = True
             print(f"✅ Earth Engine initialized with default configuration")
-        except Exception as e:
-            print(f"⚠️ Earth Engine not initialized: {e}")
-            print("   Please set GEE_PROJECT_ID in Colab secrets or authenticate manually")
-            
+        except Exception as e1:
+            try:
+                ee.Authenticate()
+                if credentials:
+                    ee.Initialize(credentials=credentials)
+                else:
+                    ee.Initialize()
+                EE_AVAILABLE = True
+                print(f"✅ Earth Engine initialized after authentication")
+            except Exception as e2:
+                warnings.warn("Earth Engine authentication and initialization failed.")
+                EE_AVAILABLE = False
+                print(f"⚠️ Earth Engine not initialized: {e2}")
+                print("   Please set GEE_PROJECT_ID in Colab secrets or authenticate manually")
+
 except ImportError:
     EE_AVAILABLE = False
     print("⚠️ Earth Engine not installed")
