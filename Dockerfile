@@ -61,7 +61,7 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 5000
 
 # Health check (respect Railway's PORT env)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD sh -c 'curl -f http://localhost:${PORT:-5000}/api/status || exit 1'
 
 # Run with gunicorn for production, binding to dynamic PORT if provided
