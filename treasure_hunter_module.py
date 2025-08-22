@@ -185,6 +185,12 @@ try:
         except Exception as b64_err:
             print(f"⚠️ Failed to decode base64 GEE_SERVICE_ACCOUNT_JSON: {b64_err}")
     credentials_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+    # Non-sensitive diagnostics about env presence
+    try:
+        creds_path_exists = os.path.exists(credentials_path) if credentials_path else False
+        print(f"🔎 EE env: project_id_set={bool(project_id)} sa_json_set={bool(service_json)} creds_path_set={bool(credentials_path)} creds_path_exists={creds_path_exists}")
+    except Exception:
+        pass
     if service_json:
         try:
             info = json.loads(service_json)
