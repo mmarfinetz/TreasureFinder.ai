@@ -10,12 +10,86 @@ pip install dofa torchgeo torch torchvision
 pip install geopandas folium xgboost
 ```
 
-Download and unpack the DOFA training set (adjust paths as needed):
+### Real Training Data
+
+This repository includes real archaeological training data from the ArchaeoScape dataset:
+- **Location**: `frontend/training_data/`
+- **Contents**: 600+ georeferenced TIFF images with bounding box annotations
+- **Categories**: DTM, Hillshade, Local_dominance, Open_Positive, Sky_View_Factor, Slope
+- **Labels**: Archaeological features (roundhouses)
+
+### Using the Training Data
 
 ```bash
-mkdir -p data/dofa
-wget -O data/dofa/dataset.zip https://example.com/datasets/dofa_dataset.zip
-unzip data/dofa/dataset.zip -d data/dofa
+# Validate data integrity (requires PRODUCTION_MODE=true)
+export PRODUCTION_MODE=true
+python train_from_annotations.py --dry-run
+
+# Train CNN with real data
+python train_from_annotations.py \
+  --data-root frontend/training_data \
+  --datasets DTM,Hillshade,Slope \
+  --epochs 30 \
+  --batch-size 32
+
+# For custom TIFF datasets, point to your data directory
+python train_from_annotations.py \
+  --data-root /path/to/your/tiff/data \
+  --train-csv train_annotations.csv \
+  --val-csv valid_annotations.csv
+```
+
+### Data Acquisition for New Regions
+
+For satellite imagery of new regions, configure one of these providers:
+
+1. **Google Earth Engine** (Recommended - Free with quota)
+   ```bash
+   export GEE_PROJECT_ID="your-project-id"
+   export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
+   ```
+   Setup: https://developers.google.com/earth-engine/guides/service_account
+
+2. **Mapbox** (RGB only, easy setup)
+   ```bash
+   export MAPBOX_ACCESS_TOKEN="your-token"
+   ```
+   Get token: https://account.mapbox.com/access-tokens/
+
+3. **Sentinel Hub** (Advanced features - NOT YET IMPLEMENTED)
+   ```bash
+   export SENTINELHUB_CLIENT_ID="your-client-id"
+   export SENTINELHUB_CLIENT_SECRET="your-secret"
+   ```
+   Note: Full implementation pending
+
+4. **Planet Labs** (High resolution - NOT YET IMPLEMENTED)
+   ```bash
+   export PLANET_API_KEY="your-api-key"
+   ```
+   Note: Full implementation pending
+
+## Data Validation
+
+### Validate Training Data Integrity
+
+```bash
+# Quick validation - checks if CSV references resolve to real files
+python train_from_annotations.py --dry-run
+
+# Full validation with sampling (N=50 random samples)
+python -c "
+import os, csv, random
+data_root = 'frontend/training_data'
+for dataset in ['DTM', 'Hillshade', 'Slope']:
+    csv_path = os.path.join(data_root, dataset, 'train_annotations.csv')
+    if not os.path.exists(csv_path): continue
+    with open(csv_path) as f:
+        rows = list(csv.reader(f))
+    sample = random.sample(rows, min(50, len(rows)))
+    missing = sum(1 for r in sample if not os.path.exists(os.path.join(data_root, dataset, r[0])))
+    print(f'{dataset}: {len(rows)} annotations, {missing}/{len(sample)} missing in sample')
+"
 ```
 
 ## DOFA Segmenter Usage
@@ -64,8 +138,22 @@ passes a threshold, and ranking them for follow‑up.
 
 How `TreasurHunter.ipynb` works end‑to‑end, focusing on the concrete algorithms, data flow, and decision logic.
 
-### Production guard and environment setup
-- **Strict production mode**: Sets `PRODUCTION_MODE=true` and asserts the absence of `ALLOW_TEST_MODE`, `DEBUG`, `MOCK_DATA`.
+### Production Mode Requirements
+
+**IMPORTANT**: In production, the system enforces:
+- **No mock data**: `MOCK_DATA` must be unset or `false`
+- **Real providers only**: At least one satellite provider must be configured
+- **Data validation**: All training data paths must exist
+- **Hard failures**: Missing credentials or data cause immediate errors
+
+```bash
+# Enable production mode
+export PRODUCTION_MODE=true
+export MOCK_DATA=false
+
+# Verify configuration
+python -c "from treasure_api import validate_real_providers; print(validate_real_providers())"
+```
 - **Secrets/bootstrap**:
   - If in Colab, pulls secrets into env vars (`GEE_PROJECT_ID`, `SENTINEL_HUB_API_KEY`, `PLANET_API_KEY`, `MAPBOX_ACCESS_TOKEN`).
   - Initializes optional dependencies and reports status: PyTorch, XGBoost, Folium, GeoPandas, Earth Engine, Requests.

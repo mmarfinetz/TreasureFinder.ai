@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers (0 recommended on macOS)")
     parser.add_argument("--model-out", default=None, help="Output path for saved model; default saved_models/<timestamp>.pt")
     parser.add_argument("--dry-run", action="store_true", help="Only validate dataset and exit")
+    parser.add_argument("--skip-validation", action="store_true", help="Skip file existence validation (not recommended)")
     parser.add_argument(
         "--bands",
         default="",
@@ -58,14 +59,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def read_annotations(dataset_dir: str, csv_name: str) -> List[Tuple[str, Tuple[int, int, int, int], str]]:
+def read_annotations(dataset_dir: str, csv_name: str, validate_paths: bool = True) -> List[Tuple[str, Tuple[int, int, int, int], str]]:
     csv_path = os.path.join(dataset_dir, csv_name)
     samples: List[Tuple[str, Tuple[int, int, int, int], str]] = []
+    missing_files: List[str] = []
+    
     if not os.path.exists(csv_path):
+        if validate_paths:
+            raise FileNotFoundError(f"Annotation CSV not found: {csv_path}")
         return samples
+    
     with open(csv_path, "r", newline="") as f:
         reader = csv.reader(f)
-        for row in reader:
+        for row_idx, row in enumerate(reader):
             if not row or len(row) < 6:
                 # Support rows without header: path,xmin,ymin,xmax,ymax,label
                 # Some CSVs appear as 6 columns; if 5 columns, last is label
@@ -79,18 +85,40 @@ def read_annotations(dataset_dir: str, csv_name: str) -> List[Tuple[str, Tuple[i
                 continue
             label = row[5].strip() if len(row) > 5 else "unknown"
             img_path = os.path.join(dataset_dir, img_rel)
+            
+            # Validate file existence in production mode
+            if validate_paths and not os.path.exists(img_path):
+                missing_files.append(f"Row {row_idx+1}: {img_path}")
+            
             samples.append((img_path, (xmin, ymin, xmax, ymax), label))
+    
+    if validate_paths and missing_files:
+        error_msg = f"\nMissing {len(missing_files)} files referenced in {csv_path}:\n"
+        error_msg += "\n".join(missing_files[:10])  # Show first 10
+        if len(missing_files) > 10:
+            error_msg += f"\n... and {len(missing_files) - 10} more"
+        raise FileNotFoundError(error_msg)
+    
     return samples
 
 
-def collect_dataset(data_root: str, datasets: List[str], train_csv: str, val_csv: str):
+def collect_dataset(data_root: str, datasets: List[str], train_csv: str, val_csv: str, validate_paths: bool = True):
     train_samples: List[Tuple[str, Tuple[int, int, int, int], str]] = []
     val_samples: List[Tuple[str, Tuple[int, int, int, int], str]] = []
+    
+    # Enforce production mode validation
+    production_mode = os.environ.get('PRODUCTION_MODE', '').lower() == 'true'
+    if production_mode:
+        validate_paths = True
+        print("[PRODUCTION MODE] Enforcing strict path validation")
 
     for name in datasets:
         ds_dir = os.path.join(data_root, name)
-        train_samples.extend(read_annotations(ds_dir, train_csv))
-        val_samples.extend(read_annotations(ds_dir, val_csv))
+        if not os.path.exists(ds_dir):
+            raise FileNotFoundError(f"Dataset directory not found: {ds_dir}")
+        
+        train_samples.extend(read_annotations(ds_dir, train_csv, validate_paths))
+        val_samples.extend(read_annotations(ds_dir, val_csv, validate_paths))
 
     # Build label mapping from union of labels present
     labels_sorted = sorted({lbl for _, _, lbl in train_samples + val_samples})
@@ -125,6 +153,8 @@ class BBoxPatchDataset(Dataset):
         img_path, (xmin, ymin, xmax, ymax), label = self.samples[idx]
         try:
             base_img = Image.open(img_path).convert("RGB")
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Image file not found: {img_path}. Ensure --data-root points to correct directory with real .tif files.")
         except Exception as e:
             raise RuntimeError(f"Failed to open image: {img_path}: {e}")
 
@@ -215,8 +245,13 @@ def main() -> None:
     if band_names:
         print(f"Bands: {band_names} | include_rgb={args.include_rgb}")
 
+    # Validate data root exists
+    if not os.path.exists(args.data_root):
+        raise FileNotFoundError(f"Data root directory not found: {args.data_root}")
+    
+    validate_paths = not args.skip_validation
     train_samples, val_samples, class_to_idx = collect_dataset(
-        args.data_root, datasets, args.train_csv, args.val_csv
+        args.data_root, datasets, args.train_csv, args.val_csv, validate_paths
     )
 
     if len(train_samples) == 0:
@@ -227,12 +262,52 @@ def main() -> None:
     print(f"Train samples: {len(train_samples)} | Val samples: {len(val_samples)}")
 
     if args.dry_run:
-        # Quick path existence check on a subset
-        missing = 0
-        for i, (p, *_rest) in enumerate(train_samples[:2000]):
+        # Comprehensive validation in dry-run mode
+        import random
+        print("\n[DRY RUN] Validating data integrity...")
+        
+        # Check all training samples
+        missing_train = []
+        for i, (p, *_rest) in enumerate(train_samples):
             if not os.path.exists(p):
-                missing += 1
-        print(f"Dry run complete. Missing files in first 2k train rows: {missing}")
+                missing_train.append(p)
+        
+        # Check all validation samples
+        missing_val = []
+        for i, (p, *_rest) in enumerate(val_samples):
+            if not os.path.exists(p):
+                missing_val.append(p)
+        
+        # Random sample validation (N=50)
+        sample_size = min(50, len(train_samples))
+        random_samples = random.sample(train_samples, sample_size) if train_samples else []
+        valid_samples = sum(1 for (p, *_) in random_samples if os.path.exists(p))
+        
+        print(f"\nValidation Results:")
+        print(f"  Total train samples: {len(train_samples)}")
+        print(f"  Missing train files: {len(missing_train)}")
+        print(f"  Total val samples: {len(val_samples)}")
+        print(f"  Missing val files: {len(missing_val)}")
+        print(f"\nRandom sample check ({sample_size} samples):")
+        print(f"  Valid: {valid_samples}/{sample_size} ({100*valid_samples/sample_size:.1f}%)")
+        
+        if missing_train or missing_val:
+            print("\n[ERROR] Missing files detected!")
+            if missing_train:
+                print(f"  First 5 missing train files:")
+                for f in missing_train[:5]:
+                    print(f"    - {f}")
+            if missing_val:
+                print(f"  First 5 missing val files:")
+                for f in missing_val[:5]:
+                    print(f"    - {f}")
+            
+            # In production mode, fail hard
+            if os.environ.get('PRODUCTION_MODE', '').lower() == 'true':
+                sys.exit(1)
+        else:
+            print("\n[SUCCESS] All referenced files exist!")
+        
         return
 
     num_classes = len(class_to_idx)

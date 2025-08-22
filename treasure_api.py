@@ -18,8 +18,24 @@ import pandas as pd
 import numpy as np
 import pickle
 
+# Load environment variables from a .env file if present
+try:
+    from dotenv import load_dotenv, find_dotenv
+    _env_path = os.environ.get('ENV_FILE') or find_dotenv()
+    if _env_path:
+        load_dotenv(_env_path, override=False)
+    else:
+        load_dotenv(override=False)
+except Exception:
+    # If python-dotenv is not installed or any error occurs, continue without failing
+    pass
+
 # Set production mode environment
 os.environ['PRODUCTION_MODE'] = 'true'
+# Ensure mock/test flags are not enabled
+if 'MOCK_DATA' in os.environ:
+    # Remove to avoid triggering strict checks in downstream modules
+    os.environ.pop('MOCK_DATA', None)
 
 # Import TreasureHunter functions
 # Note: This assumes the notebook has been converted to a Python module
@@ -87,47 +103,30 @@ def validate_coordinates(lat, lon):
     except (ValueError, TypeError):
         return False, "Invalid coordinate format"
 
-def mock_analysis_result(lat, lon, analysis_type='treasure'):
-    """Generate mock analysis results when notebook functions aren't available."""
-    
-    # Generate realistic mock scores based on location
-    base_score = abs(np.sin(lat * 0.01) * np.cos(lon * 0.01))
-    anomaly_score = min(1.0, base_score + np.random.normal(0, 0.1))
-    confidence = min(1.0, 0.6 + np.random.normal(0, 0.15))
-    
-    # Mock features
-    features = {
-        'edge_density': np.random.uniform(0, 1),
-        'vegetation_index': np.random.uniform(0.2, 0.8),
-        'thermal_anomaly': np.random.uniform(0, 0.5),
-        'geometric_patterns': np.random.uniform(0, 1),
-        'spectral_anomaly': np.random.uniform(0, 1)
+def validate_real_providers():
+    """Check if real satellite providers are configured."""
+    providers_status = {
+        'google_earth_engine': bool(os.environ.get('GEE_PROJECT_ID') or os.environ.get('GOOGLE_EARTH_ENGINE_PROJECT')),
+        'mapbox': bool(os.environ.get('MAPBOX_ACCESS_TOKEN')),
+        'sentinel_hub': bool(os.environ.get('SENTINELHUB_CLIENT_ID') and os.environ.get('SENTINELHUB_CLIENT_SECRET')),
+        'planet': bool(os.environ.get('PLANET_API_KEY'))
     }
     
-    # Generate description based on score
-    if anomaly_score > 0.8:
-        description = "🔴 Very high anomaly - Priority investigation recommended"
-    elif anomaly_score > 0.6:
-        description = "🟠 Significant anomaly detected - Potential archaeological interest"
-    elif anomaly_score > 0.4:
-        description = "🟡 Moderate anomaly - Worth further investigation"
-    elif anomaly_score > 0.2:
-        description = "🟢 Minor anomaly - Low priority"
-    else:
-        description = "⚪ No significant anomalies detected"
+    # At least one provider must be configured
+    configured_providers = [name for name, status in providers_status.items() if status]
     
-    return {
-        'lat': lat,
-        'lon': lon,
-        'score': float(anomaly_score),
-        'anomaly_score': float(anomaly_score),
-        'confidence': float(confidence),
-        'description': description,
-        'features': features,
-        'method': 'mock_analysis',
-        'timestamp': datetime.now().isoformat(),
-        'status': 'success'
-    }
+    if not configured_providers:
+        error_msg = (
+            "[PRODUCTION MODE] No satellite providers configured!\n"
+            "Please configure at least one provider:\n"
+            "  - Google Earth Engine: Set GEE_PROJECT_ID or GOOGLE_EARTH_ENGINE_PROJECT\n"
+            "  - Mapbox: Set MAPBOX_ACCESS_TOKEN\n"
+            "  - Sentinel Hub: Set SENTINELHUB_CLIENT_ID and SENTINELHUB_CLIENT_SECRET\n"
+            "  - Planet Labs: Set PLANET_API_KEY"
+        )
+        raise RuntimeError(error_msg)
+    
+    return configured_providers
 
 @app.route('/')
 def index():
@@ -173,15 +172,39 @@ def analyze_single_location():
         lat, lon = result
         analysis_type = data.get('analysis_type', 'treasure')  # 'treasure', 'geological', 'both'
         
-        # Perform analysis
-        if NOTEBOOK_FUNCTIONS_AVAILABLE:
+        # Enforce production mode - no mock data
+        if not NOTEBOOK_FUNCTIONS_AVAILABLE:
+            return jsonify({
+                'error': 'Analysis functions not available. Please run: python convert_notebook.py',
+                'required_action': 'Convert TreasurHunter.ipynb to treasure_hunter_module.py'
+            }), 503
+        
+        # Validate real providers are configured
+        try:
+            configured_providers = validate_real_providers()
+        except RuntimeError as e:
+            return jsonify({'error': str(e)}), 503
+        
+        # Perform real analysis
+        try:
             if analysis_type == 'both':
                 result = combined_analysis(lat, lon, 'both')
             else:
                 result = analyze_satellite_anomalies(lat, lon)
-        else:
-            # Use mock analysis
-            result = mock_analysis_result(lat, lon, analysis_type)
+            
+            # Verify result is not mock
+            if result.get('method') == 'mock_analysis':
+                return jsonify({
+                    'error': 'Real satellite data unavailable',
+                    'configured_providers': configured_providers,
+                    'suggestion': 'Check provider credentials and network connectivity'
+                }), 503
+                
+        except Exception as e:
+            return jsonify({
+                'error': f'Real analysis failed: {str(e)}',
+                'configured_providers': configured_providers
+            }), 500
         
         return jsonify({
             'success': True,
@@ -232,24 +255,10 @@ def analyze_region():
             else:
                 results = df
         else:
-            # Generate mock regional data
-            results = []
-            angles = np.linspace(0, 2 * np.pi, num_points)
-            distances = np.random.uniform(0, radius_km, num_points)
-            
-            for i, (angle, dist) in enumerate(zip(angles, distances)):
-                # Calculate offset coordinates
-                lat_offset = (dist / 111.0) * np.cos(angle)
-                lon_offset = (dist / (111.0 * np.cos(np.radians(lat)))) * np.sin(angle)
-                
-                point_lat = lat + lat_offset
-                point_lon = lon + lon_offset
-                
-                result = mock_analysis_result(point_lat, point_lon, analysis_type)
-                results.append(result)
-            
-            # Sort by score
-            results = sorted(results, key=lambda x: x['score'], reverse=True)
+            return jsonify({
+                'error': 'Analysis functions not available. Please run: python convert_notebook.py',
+                'required_action': 'Convert TreasurHunter.ipynb to treasure_hunter_module.py'
+            }), 503
         
         # Generate summary statistics
         if results:
@@ -326,29 +335,10 @@ def predict_discovery_zones():
                 df = main_analysis(region_name, (lat, lon), search_radius_km, grid_density)
                 results = df.to_dict('records')
         else:
-            # Mock predictive analysis
-            results = []
-            for i in range(grid_density):
-                # Generate random points in search area
-                angle = np.random.uniform(0, 2 * np.pi)
-                distance = np.random.uniform(0, search_radius_km)
-                
-                lat_offset = (distance / 111.0) * np.cos(angle)
-                lon_offset = (distance / (111.0 * np.cos(np.radians(lat)))) * np.sin(angle)
-                
-                point_lat = lat + lat_offset
-                point_lon = lon + lon_offset
-                
-                result = mock_analysis_result(point_lat, point_lon)
-                
-                # Only include results above threshold
-                if result['score'] >= min_score_threshold:
-                    result['discovery_potential'] = result['score'] * np.random.uniform(0.8, 1.2)
-                    result['priority_rank'] = i + 1
-                    results.append(result)
-            
-            # Sort by discovery potential
-            results = sorted(results, key=lambda x: x.get('discovery_potential', 0), reverse=True)
+            return jsonify({
+                'error': 'Predictive analysis not available. Please ensure module is loaded.',
+                'required_action': 'Convert TreasurHunter.ipynb to treasure_hunter_module.py'
+            }), 503
         
         # Filter and rank results
         high_potential_sites = [r for r in results if r.get('score', 0) >= min_score_threshold]
@@ -810,8 +800,23 @@ if __name__ == '__main__':
     print(f"API Version: {API_VERSION}")
     
     if not NOTEBOOK_FUNCTIONS_AVAILABLE:
-        print("\n⚠️ NOTE: Running in API-only mode with mock data")
-        print("To use real analysis, convert TreasurHunter.ipynb to treasure_hunter_module.py")
+        print("\n❌ ERROR: Analysis functions not available!")
+        print("Required: Convert TreasurHunter.ipynb to treasure_hunter_module.py")
+        print("Run: python convert_notebook.py")
+        
+        # In production mode, fail fast
+        if os.environ.get('PRODUCTION_MODE', '').lower() == 'true':
+            print("\n[PRODUCTION MODE] Cannot start without real analysis functions")
+            sys.exit(1)
+    
+    # Validate providers in production mode (warn instead of exit for local runs)
+    if os.environ.get('PRODUCTION_MODE', '').lower() == 'true':
+        try:
+            providers = validate_real_providers()
+            print(f"\n✅ Configured providers: {', '.join(providers)}")
+        except RuntimeError as e:
+            print(f"\n{e}")
+            print("\n⚠️ Continuing to start the server. Endpoints will return 503 until a provider is configured.")
     
     print("\n🌐 API Endpoints:")
     print("  GET  /api/status                 - API status")
