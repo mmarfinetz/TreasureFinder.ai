@@ -34,6 +34,7 @@ COPY --from=builder /root/.local /root/.local
 
 # Make sure scripts in .local are usable
 ENV PATH=/root/.local/bin:$PATH
+ENV PYTHONPATH=/root/.local/lib/python3.10/site-packages
 
 # Copy application files
 COPY treasure_api.py .
