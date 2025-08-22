@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TreasureHunter - Satellite Analysis System</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fas fa-treasure-map"></i>
+                    <h1>TreasureHunter</h1>
+                    <span class="version">v1.0</span>
+                </div>
+                <div class="status-indicator">
+                    <div id="api-status" class="status offline">
+                        <i class="fas fa-circle"></i>
+                        <span>Connecting...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="container">
+            
+            <!-- Control Panel -->
+            <div class="control-panel">
+                <div class="panel-section">
+                    <h3><i class="fas fa-map-marker-alt"></i> Location Input</h3>
+                    
+                    <div class="input-group">
+                        <div class="input-tabs">
+                            <button class="tab-button active" data-tab="coordinates">Coordinates</button>
+                            <button class="tab-button" data-tab="location-name">Location Name</button>
+                            <button class="tab-button" data-tab="examples">Examples</button>
+                        </div>
+                        
+                        <!-- Coordinates Tab -->
+                        <div id="coordinates-tab" class="tab-content active">
+                            <div class="coord-inputs">
+                                <div class="coord-group">
+                                    <label for="latitude">Latitude</label>
+                                    <input type="number" id="latitude" step="0.0001" min="-90" max="90" 
+                                           placeholder="e.g., 29.9792" value="29.9792">
+                                </div>
+                                <div class="coord-group">
+                                    <label for="longitude">Longitude</label>
+                                    <input type="number" id="longitude" step="0.0001" min="-180" max="180" 
+                                           placeholder="e.g., 31.1342" value="31.1342">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Location Name Tab -->
+                        <div id="location-name-tab" class="tab-content">
+                            <div class="location-search">
+                                <input type="text" id="location-search" placeholder="Enter location name (e.g., Giza, Oak Island)">
+                                <button id="geocode-btn" class="btn btn-secondary">
+                                    <i class="fas fa-search"></i> Find
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Examples Tab -->
+                        <div id="examples-tab" class="tab-content">
+                            <div id="example-locations" class="example-grid">
+                                <!-- Populated by JavaScript -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Analysis Parameters -->
+                <div class="panel-section">
+                    <h3><i class="fas fa-cogs"></i> Analysis Parameters</h3>
+                    
+                    <div class="param-group">
+                        <label for="analysis-type">Analysis Type</label>
+                        <select id="analysis-type">
+                            <option value="treasure">Archaeological Sites</option>
+                            <option value="geological">Geological Features</option>
+                            <option value="both">Combined Analysis</option>
+                            <option value="comprehensive">Comprehensive Scan</option>
+                        </select>
+                    </div>
+                    
+                    <div class="param-group">
+                        <label for="region-name">Region Name</label>
+                        <input type="text" id="region-name" placeholder="My Analysis Region" value="Analysis Region">
+                    </div>
+                    
+                    <div class="param-group">
+                        <label for="radius">Search Radius (km)</label>
+                        <input type="range" id="radius" min="1" max="100" value="10" step="1">
+                        <span id="radius-display">10 km</span>
+                    </div>
+                    
+                    <div class="param-group">
+                        <label for="num-points">Analysis Points</label>
+                        <input type="range" id="num-points" min="5" max="50" value="20" step="5">
+                        <span id="points-display">20 points</span>
+                    </div>
+                    
+                    <div class="param-group">
+                        <label for="min-threshold">Minimum Score Threshold</label>
+                        <input type="range" id="min-threshold" min="0" max="1" value="0.4" step="0.1">
+                        <span id="threshold-display">0.4</span>
+                    </div>
+                </div>
+                
+                <!-- Action Buttons -->
+                <div class="panel-section">
+                    <div class="action-buttons">
+                        <button id="analyze-single-btn" class="btn btn-primary">
+                            <i class="fas fa-crosshairs"></i> Analyze Single Point
+                        </button>
+                        <button id="analyze-region-btn" class="btn btn-success">
+                            <i class="fas fa-search-plus"></i> Analyze Region
+                        </button>
+                        <button id="predict-discovery-btn" class="btn btn-warning">
+                            <i class="fas fa-crystal-ball"></i> Predict Discovery Zones
+                        </button>
+                        <button id="train-model-btn" class="btn btn-info">
+                            <i class="fas fa-brain"></i> CNN Training
+                        </button>
+                        <button id="clear-results-btn" class="btn btn-secondary">
+                            <i class="fas fa-trash"></i> Clear Results
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Results Area -->
+            <div class="results-area">
+                
+                <!-- Map Container -->
+                <div class="map-container">
+                    <div id="map" class="map"></div>
+                    
+                    <!-- Map Controls -->
+                    <div class="map-controls">
+                        <button id="toggle-satellite" class="map-control-btn" title="Toggle Satellite View">
+                            <i class="fas fa-satellite"></i>
+                        </button>
+                        <button id="center-map" class="map-control-btn" title="Center on Current Location">
+                            <i class="fas fa-crosshairs"></i>
+                        </button>
+                        <button id="fullscreen-map" class="map-control-btn" title="Fullscreen Map">
+                            <i class="fas fa-expand"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Analysis Results -->
+                <div class="analysis-results">
+                    
+                    <!-- Loading Indicator -->
+                    <div id="loading-indicator" class="loading hidden">
+                        <div class="loading-spinner"></div>
+                        <p>Analyzing satellite data...</p>
+                        <div class="loading-progress">
+                            <div class="progress-bar">
+                                <div id="progress-fill" class="progress-fill"></div>
+                            </div>
+                            <span id="progress-text">0%</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Results Summary -->
+                    <div id="results-summary" class="results-summary hidden">
+                        <h3><i class="fas fa-chart-bar"></i> Analysis Summary</h3>
+                        <div class="summary-stats">
+                            <div class="stat-card">
+                                <div class="stat-value" id="total-sites">0</div>
+                                <div class="stat-label">Total Sites</div>
+                            </div>
+                            <div class="stat-card high-priority">
+                                <div class="stat-value" id="high-priority">0</div>
+                                <div class="stat-label">High Priority</div>
+                            </div>
+                            <div class="stat-card medium-priority">
+                                <div class="stat-value" id="medium-priority">0</div>
+                                <div class="stat-label">Medium Priority</div>
+                            </div>
+                            <div class="stat-card low-priority">
+                                <div class="stat-value" id="low-priority">0</div>
+                                <div class="stat-label">Low Priority</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Detailed Results -->
+                    <div id="detailed-results" class="detailed-results hidden">
+                        <h3><i class="fas fa-list"></i> Detailed Analysis Results</h3>
+                        <div class="results-controls">
+                            <div class="sort-controls">
+                                <label>Sort by:</label>
+                                <select id="sort-by">
+                                    <option value="score">Score (High to Low)</option>
+                                    <option value="confidence">Confidence</option>
+                                    <option value="distance">Distance</option>
+                                </select>
+                            </div>
+                            <div class="filter-controls">
+                                <label>Filter:</label>
+                                <select id="filter-by">
+                                    <option value="all">All Results</option>
+                                    <option value="high">High Priority Only</option>
+                                    <option value="medium">Medium Priority Only</option>
+                                    <option value="low">Low Priority Only</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div id="results-table-container" class="results-table-container">
+                            <table id="results-table" class="results-table">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Coordinates</th>
+                                        <th>Score</th>
+                                        <th>Confidence</th>
+                                        <th>Description</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="results-tbody">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <!-- No Results Message -->
+                    <div id="no-results" class="no-results">
+                        <div class="no-results-icon">
+                            <i class="fas fa-search"></i>
+                        </div>
+                        <h3>Ready to Analyze</h3>
+                        <p>Configure your analysis parameters and click an analysis button to begin discovering potential sites.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-info">
+                    <p>&copy; 2024 TreasureHunter - Satellite Analysis System</p>
+                    <p>Powered by Machine Learning and Satellite Imagery</p>
+                </div>
+                <div class="footer-links">
+                    <a href="#" id="about-btn">About</a>
+                    <a href="#" id="help-btn">Help</a>
+                    <a href="#" id="api-docs-btn">API Docs</a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Modals -->
+    <!-- Location Details Modal -->
+    <div id="location-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Location Details</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <!-- Populated by JavaScript -->
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary modal-close">Close</button>
+                <button id="analyze-this-location" class="btn btn-primary">Analyze This Location</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Error Modal -->
+    <div id="error-modal" class="modal">
+        <div class="modal-content error-modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-exclamation-triangle"></i> Error</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body" id="error-modal-body">
+                <!-- Populated by JavaScript -->
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary modal-close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CNN Training Modal -->
+    <div id="training-modal" class="modal">
+        <div class="modal-content training-modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-brain"></i> CNN Model Training</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="training-interface">
+                    <!-- Model Status -->
+                    <div class="model-status-section">
+                        <h4>Current Model Status</h4>
+                        <div class="model-info">
+                            <div class="info-row">
+                                <span class="label">Model:</span>
+                                <span id="current-model-name">No model loaded</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="label">Accuracy:</span>
+                                <span id="current-model-accuracy">--</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="label">Last Trained:</span>
+                                <span id="current-model-date">Never</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Training Configuration -->
+                    <div class="training-config-section">
+                        <h4>Training Configuration</h4>
+                        
+                        <div class="config-group">
+                            <label>Training Mode</label>
+                            <select id="training-mode">
+                                <option value="quick">Quick Test (100 samples, 10 epochs)</option>
+                                <option value="balanced" selected>Balanced (500 samples, 30 epochs)</option>
+                                <option value="comprehensive">Comprehensive (1000 samples, 50 epochs)</option>
+                                <option value="custom">Custom</option>
+                            </select>
+                        </div>
+
+                        <div id="custom-config" style="display: none;">
+                            <div class="config-group">
+                                <label>Number of Samples</label>
+                                <input type="number" id="num-samples" min="50" max="5000" value="500">
+                            </div>
+                            <div class="config-group">
+                                <label>Epochs</label>
+                                <input type="number" id="num-epochs" min="5" max="100" value="30">
+                            </div>
+                            <div class="config-group">
+                                <label>Learning Rate</label>
+                                <input type="number" id="learning-rate" min="0.0001" max="0.1" step="0.0001" value="0.001">
+                            </div>
+                        </div>
+
+                        <div class="config-group">
+                            <label>
+                                <input type="checkbox" id="use-gpu" checked>
+                                Use GPU if available
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Training Progress -->
+                    <div id="training-progress-section" style="display: none;">
+                        <h4>Training Progress</h4>
+                        
+                        <div class="progress-info">
+                            <div class="progress-row">
+                                <span>Epoch:</span>
+                                <span id="current-epoch">0</span> / <span id="total-epochs">0</span>
+                            </div>
+                            <div class="progress-row">
+                                <span>Training Loss:</span>
+                                <span id="training-loss">--</span>
+                            </div>
+                            <div class="progress-row">
+                                <span>Validation Accuracy:</span>
+                                <span id="val-accuracy">--</span>
+                            </div>
+                        </div>
+
+                        <div class="progress-bar-container">
+                            <div class="progress-bar">
+                                <div id="training-progress-bar" class="progress-fill"></div>
+                            </div>
+                            <span id="training-progress-text">0%</span>
+                        </div>
+
+                        <!-- Live Charts -->
+                        <div class="charts-container">
+                            <canvas id="loss-chart" width="400" height="200"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Model Management -->
+                    <div class="model-management-section">
+                        <h4>Model Management</h4>
+                        
+                        <div class="model-actions">
+                            <button id="save-model-btn" class="btn btn-secondary" disabled>
+                                <i class="fas fa-save"></i> Save Model
+                            </button>
+                            <button id="load-model-btn" class="btn btn-secondary">
+                                <i class="fas fa-upload"></i> Load Model
+                            </button>
+                            <button id="test-model-btn" class="btn btn-secondary" disabled>
+                                <i class="fas fa-vial"></i> Test Model
+                            </button>
+                        </div>
+
+                        <div id="saved-models-list" class="saved-models">
+                            <h5>Saved Models</h5>
+                            <div id="models-list">
+                                <!-- Populated by JavaScript -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary modal-close">Close</button>
+                <button id="start-training-btn" class="btn btn-primary">
+                    <i class="fas fa-play"></i> Start Training
+                </button>
+                <button id="stop-training-btn" class="btn btn-danger" style="display: none;">
+                    <i class="fas fa-stop"></i> Stop Training
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

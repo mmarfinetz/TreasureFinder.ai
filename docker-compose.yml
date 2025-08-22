@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  treasurehunter:
+    build: .
+    container_name: treasurehunter-app
+    ports:
+      - "80:5000"
+    environment:
+      - PRODUCTION_MODE=true
+      - FLASK_ENV=production
+      # Add your API keys here or use secrets
+      - MAPBOX_ACCESS_TOKEN=${MAPBOX_ACCESS_TOKEN}
+      - GEE_PROJECT_ID=${GEE_PROJECT_ID}
+      - SENTINEL_HUB_CLIENT_ID=${SENTINEL_HUB_CLIENT_ID}
+      - SENTINEL_HUB_CLIENT_SECRET=${SENTINEL_HUB_CLIENT_SECRET}
+      - PLANET_API_KEY=${PLANET_API_KEY}
+    volumes:
+      - ./saved_models:/app/saved_models
+      - ./logs:/app/logs
+      - ./data:/app/data
+    restart: unless-stopped
+    networks:
+      - treasurehunter-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  nginx:
+    image: nginx:alpine
+    container_name: treasurehunter-nginx
+    ports:
+      - "443:443"
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - treasurehunter
+    networks:
+      - treasurehunter-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: treasurehunter-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - treasurehunter-network
+    restart: unless-stopped
+
+networks:
+  treasurehunter-network:
+    driver: bridge
+
+volumes:
+  redis-data:

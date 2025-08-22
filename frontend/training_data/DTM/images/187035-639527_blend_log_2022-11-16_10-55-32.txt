@@ -1,0 +1,66 @@
+===============================================================================================
+Relief Visualization Toolbox (python), blender log
+Copyright:
+	Research Centre of the Slovenian Academy of Sciences and Arts
+	University of Ljubljana, Faculty of Civil and Geodetic Engineering
+===============================================================================================
+
+
+
+Processing info about visualizations
+===============================================================================================
+
+# Metadata of the input file
+
+	Input filename:		/Users/ick.kramer/My Drive/PhD/Arran/Arran_benchmark/DTM/images/187035-639527.tif
+	Number of rows:		500
+	Number of columns:	500
+	Number of bands:	1
+	Resolution (x, y):	0.5, 0.5
+
+# Selected visualization parameters
+	Overwrite: 0
+	Vertical exaggeration factor: 1.0
+
+# Combination:
+
+Combination name: Custom
+	>> Output render file:
+		/Users/ick.kramer/My Drive/PhD/Arran/Arran_benchmark/DTM/images/DTM-187035-639527_Custom.tif
+
+=== LAYERS ===
+
+Layer: 1
+Visualization: Sky-View Factor
+	svf_n_dir=		16
+	svf_noise=		0
+	svf_r_max=		10
+Norm: Value
+Linear normalization, min: 0.7, max: 1.0
+Opacity: 25
+
+Layer: 2
+Visualization: Openness - Positive
+	svf_n_dir=		16
+	svf_noise=		0
+	svf_r_max=		10
+Norm: Value
+Linear normalization, min: 68.0, max: 93.0
+Opacity: 50
+
+Layer: 3
+Visualization: Slope gradient
+	slp_output_units=		degree
+Norm: Value
+Linear normalization, min: 0.0, max: 50.0
+Opacity: 50
+
+Layer: 4
+Visualization: Multiple directions hillshade
+	mhs_sun_el=		35
+	mhs_nr_dir=		16
+Norm: Value
+Linear normalization, min: 0.0, max: 1.0
+Opacity: 100
+
+# Computation time: 0.558305025100708

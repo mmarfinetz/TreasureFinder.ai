@@ -1,0 +1,12 @@
+streamlit
+streamlit-folium
+pandas
+numpy
+folium
+scikit-learn
+torch
+torchvision
+pillow
+requests
+earthengine-api
+xgboost

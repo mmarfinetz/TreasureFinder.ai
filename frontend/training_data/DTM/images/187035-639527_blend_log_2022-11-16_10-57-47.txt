@@ -1,0 +1,33 @@
+===============================================================================================
+Relief Visualization Toolbox (python), blender log
+Copyright:
+	Research Centre of the Slovenian Academy of Sciences and Arts
+	University of Ljubljana, Faculty of Civil and Geodetic Engineering
+===============================================================================================
+
+
+
+Processing info about visualizations
+===============================================================================================
+
+# Metadata of the input file
+
+	Input filename:		/Users/ick.kramer/My Drive/PhD/Arran/Arran_benchmark/DTM/images/187035-639527.tif
+	Number of rows:		500
+	Number of columns:	500
+	Number of bands:	1
+	Resolution (x, y):	0.5, 0.5
+
+# Selected visualization parameters
+	Overwrite: 0
+	Vertical exaggeration factor: 1.0
+
+# Combination:
+
+Combination name: Archaeological combined (VAT combined)
+	>> Output render file:
+		/Users/ick.kramer/My Drive/PhD/Arran/Arran_benchmark/DTM/images/DTM-187035-639527_Archaeological_combined_(VAT_combined).tif
+
+=== LAYERS ===
+
+# Computation time: 0.700411319732666
