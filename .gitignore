@@ -94,7 +94,6 @@ key.json
 prompt.md
 prompt.txt
 *_prompt.txt
-convert_notebook.py
 
 # API keys and sensitive files
 .env*
