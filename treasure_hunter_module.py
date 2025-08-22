@@ -180,7 +180,26 @@ try:
         try:
             info = json.loads(service_json)
             sa_email = info.get('client_email')
-            credentials = ee.ServiceAccountCredentials(sa_email, key_data=service_json)
+            # Write JSON to a temp file to satisfy ee.ServiceAccountCredentials file-based loading
+            temp_key_path = os.environ.get('GEE_SERVICE_ACCOUNT_JSON_PATH', '/tmp/gee_sa.json')
+            try:
+                # Only write if file missing or different to avoid repeated writes
+                write_file = True
+                if os.path.exists(temp_key_path):
+                    try:
+                        with open(temp_key_path, 'r') as existing:
+                            if existing.read().strip() == service_json.strip():
+                                write_file = False
+                    except Exception:
+                        write_file = True
+                if write_file:
+                    with open(temp_key_path, 'w') as f:
+                        f.write(service_json)
+            except Exception as file_err:
+                print(f"⚠️ Could not persist service account JSON to {temp_key_path}: {file_err}")
+                temp_key_path = None
+            if temp_key_path:
+                credentials = ee.ServiceAccountCredentials(sa_email, temp_key_path)
         except Exception as cred_err:
             print(f"⚠️ Failed to load GEE_SERVICE_ACCOUNT_JSON credentials: {cred_err}")
     elif credentials_path:
@@ -189,9 +208,9 @@ try:
                 key_data = f.read()
             info = json.loads(key_data)
             sa_email = info.get('client_email')
-            credentials = ee.ServiceAccountCredentials(sa_email, key_data=key_data)
+            credentials = ee.ServiceAccountCredentials(sa_email, credentials_path)
         except Exception as cred_err:
-            print(f"⚠️ Failed to load GOOGLE_APPLICATION_CREDENTIALS: {cred_err}")
+            print(f"⚠️ Failed to load GOOGLE_APPLICATION_CREDENTIALS from path: {cred_err}")
 
     if project_id:
         # Method 1: Initialize with project ID
@@ -203,15 +222,17 @@ try:
             EE_AVAILABLE = True
             print(f"✅ Earth Engine initialized with project: {project_id}")
         except Exception as e1:
-            # Method 2: Authenticate then initialize
+            # Method 2: Authenticate then initialize (only in Colab)
             try:
-                ee.Authenticate()
+                if IN_COLAB:
+                    ee.Authenticate()
                 if credentials:
                     ee.Initialize(credentials=credentials, project=project_id)
                 else:
                     ee.Initialize(project=project_id)
                 EE_AVAILABLE = True
-                print(f"✅ Earth Engine initialized after authentication with project: {project_id}")
+                if IN_COLAB:
+                    print(f"✅ Earth Engine initialized after authentication with project: {project_id}")
             except Exception as e2:
                 # Method 3: Try without project ID (uses default)
                 try:
@@ -239,18 +260,22 @@ try:
             print(f"✅ Earth Engine initialized with default configuration")
         except Exception as e1:
             try:
-                ee.Authenticate()
+                if IN_COLAB:
+                    ee.Authenticate()
                 if credentials:
                     ee.Initialize(credentials=credentials)
                 else:
                     ee.Initialize()
                 EE_AVAILABLE = True
-                print(f"✅ Earth Engine initialized after authentication")
+                if IN_COLAB:
+                    print(f"✅ Earth Engine initialized after authentication")
             except Exception as e2:
                 warnings.warn("Earth Engine authentication and initialization failed.")
                 EE_AVAILABLE = False
                 print(f"⚠️ Earth Engine not initialized: {e2}")
-                print("   Please set GEE_PROJECT_ID in Colab secrets or authenticate manually")
+                if not (service_json or credentials_path):
+                    print("   No service account credentials detected. Set GEE_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS.")
+                print("   For local dev, run: earthengine authenticate")
 
 except ImportError:
     EE_AVAILABLE = False
