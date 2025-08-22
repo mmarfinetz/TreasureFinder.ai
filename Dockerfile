@@ -40,7 +40,11 @@ COPY treasure_api.py .
 COPY treasure_hunter_module.py .
 COPY convert_notebook.py .
 COPY frontend/ ./frontend/
+# Copy notebooks needed for conversion
 COPY TreasurHunter.ipynb .
+COPY satellite.ipynb .
+COPY satellite_300mile.ipynb .
+COPY satellite_production_modular_unified.ipynb .
 
 # Create necessary directories
 RUN mkdir -p saved_models logs
