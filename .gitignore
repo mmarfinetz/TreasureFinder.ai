@@ -87,3 +87,16 @@ docs/_build/
 secrets/
 credentials/
 *.secret
+key.json
+
+# Claude/Development files
+.claude/
+prompt.md
+prompt.txt
+*_prompt.txt
+convert_notebook.py
+
+# API keys and sensitive files
+.env*
+*credentials*
+service-account*.json
