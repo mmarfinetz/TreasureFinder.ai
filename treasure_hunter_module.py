@@ -37,6 +37,7 @@ Handles conditional imports with fallbacks for optional dependencies.
 """
 import io
 import json
+import base64
 import os
 import random
 import sys
@@ -175,6 +176,14 @@ try:
     # Optional service account credentials
     credentials = None
     service_json = os.environ.get('GEE_SERVICE_ACCOUNT_JSON')
+    # Allow base64 encoding to safely store JSON in env vars
+    if service_json and service_json.strip().startswith('eyJ'):
+        try:
+            decoded = base64.b64decode(service_json).decode('utf-8')
+            service_json = decoded
+            print("🔑 Detected base64-encoded GEE_SERVICE_ACCOUNT_JSON; decoded successfully")
+        except Exception as b64_err:
+            print(f"⚠️ Failed to decode base64 GEE_SERVICE_ACCOUNT_JSON: {b64_err}")
     credentials_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
     if service_json:
         try:
@@ -200,6 +209,7 @@ try:
                 temp_key_path = None
             if temp_key_path:
                 credentials = ee.ServiceAccountCredentials(sa_email, temp_key_path)
+                print(f"🔐 Using Earth Engine service account: {sa_email} (from env JSON)")
         except Exception as cred_err:
             print(f"⚠️ Failed to load GEE_SERVICE_ACCOUNT_JSON credentials: {cred_err}")
     elif credentials_path:
@@ -209,6 +219,7 @@ try:
             info = json.loads(key_data)
             sa_email = info.get('client_email')
             credentials = ee.ServiceAccountCredentials(sa_email, credentials_path)
+            print(f"🔐 Using Earth Engine service account: {sa_email} (from file path)")
         except Exception as cred_err:
             print(f"⚠️ Failed to load GOOGLE_APPLICATION_CREDENTIALS from path: {cred_err}")
 
