@@ -171,24 +171,31 @@ try:
     EE_AVAILABLE = False
 
     # Try multiple initialization methods
-    project_id = os.environ.get('GEE_PROJECT_ID')
+    gee_project_env = os.environ.get('GEE_PROJECT_ID')
+    gee_project_alias_env = os.environ.get('GOOGLE_EARTH_ENGINE_PROJECT')
+    project_id = gee_project_env or gee_project_alias_env
 
     # Optional service account credentials
     credentials = None
     service_json = os.environ.get('GEE_SERVICE_ACCOUNT_JSON')
     # Allow base64 encoding to safely store JSON in env vars
-    if service_json and service_json.strip().startswith('eyJ'):
+    if service_json:
         try:
-            decoded = base64.b64decode(service_json).decode('utf-8')
+            decoded = base64.b64decode(service_json, validate=True).decode('utf-8')
             service_json = decoded
-            print("🔑 Detected base64-encoded GEE_SERVICE_ACCOUNT_JSON; decoded successfully")
+            print("🔑 Decoded base64 GEE_SERVICE_ACCOUNT_JSON")
         except Exception as b64_err:
-            print(f"⚠️ Failed to decode base64 GEE_SERVICE_ACCOUNT_JSON: {b64_err}")
+            print(f"🔎 Using raw GEE_SERVICE_ACCOUNT_JSON (decode failed: {b64_err})")
     credentials_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
     # Non-sensitive diagnostics about env presence
     try:
         creds_path_exists = os.path.exists(credentials_path) if credentials_path else False
-        print(f"🔎 EE env: project_id_set={bool(project_id)} sa_json_set={bool(service_json)} creds_path_set={bool(credentials_path)} creds_path_exists={creds_path_exists}")
+        print(
+            f"🔎 EE env: GEE_PROJECT_ID={gee_project_env} "
+            f"GOOGLE_EARTH_ENGINE_PROJECT={gee_project_alias_env} "
+            f"project_id={project_id} sa_json_set={bool(service_json)} "
+            f"creds_path_set={bool(credentials_path)} creds_path_exists={creds_path_exists}"
+        )
     except Exception:
         pass
     if service_json:
@@ -938,7 +945,7 @@ if IN_COLAB and not EE_AVAILABLE:
         ee.Authenticate()
         
         # Try to initialize after authentication
-        project_id = os.environ.get('GEE_PROJECT_ID')
+        project_id = os.environ.get('GEE_PROJECT_ID') or os.environ.get('GOOGLE_EARTH_ENGINE_PROJECT')
         
         if project_id:
             try:

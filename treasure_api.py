@@ -105,24 +105,39 @@ def validate_coordinates(lat, lon):
 
 def validate_real_providers():
     """Check if real satellite providers are configured."""
-    providers_status = {
-        'google_earth_engine': bool(os.environ.get('GEE_PROJECT_ID') or os.environ.get('GOOGLE_EARTH_ENGINE_PROJECT')),
-        'mapbox': bool(os.environ.get('MAPBOX_ACCESS_TOKEN')),
-        'sentinel_hub': bool(os.environ.get('SENTINELHUB_CLIENT_ID') and os.environ.get('SENTINELHUB_CLIENT_SECRET')),
-        'planet': bool(os.environ.get('PLANET_API_KEY'))
-    }
+    configured_providers = []
     
-    # At least one provider must be configured
-    configured_providers = [name for name, status in providers_status.items() if status]
+    # Check Earth Engine availability (not just env vars, but actual initialization)
+    try:
+        from treasure_hunter_module import EE_AVAILABLE
+        if EE_AVAILABLE:
+            configured_providers.append('google_earth_engine')
+    except ImportError:
+        pass
+    
+    # Check other providers by environment variables
+    if os.environ.get('MAPBOX_ACCESS_TOKEN'):
+        configured_providers.append('mapbox')
+    
+    if os.environ.get('SENTINELHUB_CLIENT_ID') and os.environ.get('SENTINELHUB_CLIENT_SECRET'):
+        configured_providers.append('sentinel_hub')
+    
+    if os.environ.get('PLANET_API_KEY'):
+        configured_providers.append('planet')
+    
+    # Log provider status for debugging
+    app.logger.info(f"Available satellite providers: {configured_providers}")
     
     if not configured_providers:
+        # More helpful error message with Railway-specific guidance
         error_msg = (
             "[PRODUCTION MODE] No satellite providers configured!\n"
-            "Please configure at least one provider:\n"
-            "  - Google Earth Engine: Set GEE_PROJECT_ID or GOOGLE_EARTH_ENGINE_PROJECT\n"
-            "  - Mapbox: Set MAPBOX_ACCESS_TOKEN\n"
-            "  - Sentinel Hub: Set SENTINELHUB_CLIENT_ID and SENTINELHUB_CLIENT_SECRET\n"
-            "  - Planet Labs: Set PLANET_API_KEY"
+            "For Railway deployment, please add environment variables:\n"
+            "  - Google Earth Engine: GEE_SERVICE_ACCOUNT_JSON (base64) and GEE_PROJECT_ID\n"
+            "  - Mapbox (simplest): MAPBOX_ACCESS_TOKEN\n"
+            "  - Sentinel Hub: SENTINELHUB_CLIENT_ID and SENTINELHUB_CLIENT_SECRET\n"
+            "  - Planet Labs: PLANET_API_KEY\n"
+            "\nQuickest fix: Add MAPBOX_ACCESS_TOKEN to Railway variables."
         )
         raise RuntimeError(error_msg)
     
@@ -136,12 +151,50 @@ def index():
 @app.route('/api/status')
 def api_status():
     """Get API status and configuration."""
+    # Check available providers
+    providers = []
+    provider_status = {}
+    
+    try:
+        # Check Earth Engine
+        from treasure_hunter_module import EE_AVAILABLE
+        if EE_AVAILABLE:
+            providers.append('google_earth_engine')
+            provider_status['google_earth_engine'] = 'connected'
+        else:
+            provider_status['google_earth_engine'] = 'not available'
+            
+        # Check Mapbox
+        if os.environ.get('MAPBOX_ACCESS_TOKEN'):
+            providers.append('mapbox')
+            provider_status['mapbox'] = 'configured'
+        else:
+            provider_status['mapbox'] = 'no token'
+            
+        # Check other providers
+        if os.environ.get('SENTINEL_HUB_CLIENT_ID'):
+            providers.append('sentinel_hub')
+            provider_status['sentinel_hub'] = 'configured'
+            
+        if os.environ.get('PLANET_API_KEY'):
+            providers.append('planet')
+            provider_status['planet'] = 'configured'
+    except Exception as e:
+        provider_status['error'] = str(e)
+    
     return jsonify({
-        'status': 'online',
+        'status': 'healthy' if providers else 'degraded',
         'version': API_VERSION,
         'notebook_functions_available': NOTEBOOK_FUNCTIONS_AVAILABLE,
         'max_analysis_points': MAX_ANALYSIS_POINTS,
         'max_radius_km': MAX_RADIUS_KM,
+        'providers': providers,
+        'provider_status': provider_status,
+        'environment': {
+            'railway': bool(os.environ.get('RAILWAY_ENVIRONMENT')),
+            'port': os.environ.get('PORT', '5000'),
+            'production': os.environ.get('PRODUCTION_MODE', 'false')
+        },
         'timestamp': datetime.now().isoformat()
     })
 
