@@ -177,15 +177,21 @@ try:
 
     # Optional service account credentials
     credentials = None
-    service_json = os.environ.get('GEE_SERVICE_ACCOUNT_JSON')
+    # Support multiple env variants for service account JSON content
+    service_json = (
+        os.environ.get('GEE_SERVICE_ACCOUNT_JSON')
+        or os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+        or os.environ.get('GOOGLE_CREDENTIALS_B64')
+        or os.environ.get('GEE_SERVICE_ACCOUNT_JSON_B64')
+    )
     # Allow base64 encoding to safely store JSON in env vars
     if service_json:
         try:
             decoded = base64.b64decode(service_json, validate=True).decode('utf-8')
             service_json = decoded
-            print("🔑 Decoded base64 GEE_SERVICE_ACCOUNT_JSON")
+            print("🔑 Decoded base64 service account JSON from env")
         except Exception as b64_err:
-            print(f"🔎 Using raw GEE_SERVICE_ACCOUNT_JSON (decode failed: {b64_err})")
+            print(f"🔎 Using raw service account JSON from env (base64 decode failed: {b64_err})")
     credentials_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
     # Non-sensitive diagnostics about env presence
     try:
@@ -221,6 +227,11 @@ try:
                 print(f"⚠️ Could not persist service account JSON to {temp_key_path}: {file_err}")
                 temp_key_path = None
             if temp_key_path:
+                # Set GOOGLE_APPLICATION_CREDENTIALS for ADC compatibility
+                try:
+                    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_key_path
+                except Exception:
+                    pass
                 credentials = ee.ServiceAccountCredentials(sa_email, temp_key_path)
                 print(f"🔐 Using Earth Engine service account: {sa_email} (from env JSON)")
         except Exception as cred_err:
