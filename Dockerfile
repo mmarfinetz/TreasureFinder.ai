@@ -49,8 +49,10 @@ COPY satellite_production_modular_unified.ipynb .
 # Create necessary directories
 RUN mkdir -p saved_models logs
 
-# Convert notebook to module (if needed)
-RUN python convert_notebook.py || true
+# Convert notebook to module (required for API)
+RUN python convert_notebook.py && \
+    test -f treasure_hunter_module.py || \
+    (echo "ERROR: Failed to generate treasure_hunter_module.py" && exit 1)
 
 # Set environment variables
 ENV PRODUCTION_MODE=true

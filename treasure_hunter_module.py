@@ -187,11 +187,18 @@ try:
     # Allow base64 encoding to safely store JSON in env vars
     if service_json:
         try:
-            decoded = base64.b64decode(service_json, validate=True).decode('utf-8')
+            # Strip whitespace and newlines that Railway might introduce
+            service_json_clean = service_json.strip().replace('\n', '').replace(' ', '')
+            decoded = base64.b64decode(service_json_clean, validate=True).decode('utf-8')
             service_json = decoded
             print("🔑 Decoded base64 service account JSON from env")
         except Exception as b64_err:
-            print(f"🔎 Using raw service account JSON from env (base64 decode failed: {b64_err})")
+            # Try without stripping in case it's already raw JSON
+            try:
+                json.loads(service_json)  # Validate it's JSON
+                print(f"🔎 Using raw service account JSON from env (not base64 encoded)")
+            except:
+                print(f"⚠️ Service account JSON decode failed: {b64_err}")
     credentials_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
     # Non-sensitive diagnostics about env presence
     try:
@@ -209,7 +216,20 @@ try:
             info = json.loads(service_json)
             sa_email = info.get('client_email')
             # Write JSON to a temp file to satisfy ee.ServiceAccountCredentials file-based loading
+            # Use Railway-friendly path or fallback to current dir if /tmp not writable
             temp_key_path = os.environ.get('GEE_SERVICE_ACCOUNT_JSON_PATH', '/tmp/gee_sa.json')
+            
+            # Check if running in Railway environment
+            if os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RAILWAY_PROJECT_ID'):
+                # Try alternative paths for Railway
+                for path in ['/tmp/gee_sa.json', './gee_sa.json', '/app/gee_sa.json']:
+                    try:
+                        test_path = os.path.dirname(path)
+                        if os.path.exists(test_path) and os.access(test_path, os.W_OK):
+                            temp_key_path = path
+                            break
+                    except:
+                        continue
             try:
                 # Only write if file missing or different to avoid repeated writes
                 write_file = True
@@ -259,7 +279,8 @@ try:
         except Exception as e1:
             # Method 2: Authenticate then initialize (only in Colab)
             try:
-                if IN_COLAB:
+                # Only authenticate in Colab, never in Railway or production
+                if IN_COLAB and not (os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RAILWAY_PROJECT_ID')):
                     ee.Authenticate()
                 if credentials:
                     ee.Initialize(credentials=credentials, project=project_id)
