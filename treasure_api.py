@@ -213,12 +213,16 @@ def analyze_single_location():
     try:
         data = request.get_json()
         
+        # Accept both lat/lon and latitude/longitude formats for compatibility
+        lat = data.get('lat') or data.get('latitude') if data else None
+        lon = data.get('lon') or data.get('longitude') if data else None
+        
         # Validate required fields
-        if not data or 'lat' not in data or 'lon' not in data:
+        if lat is None or lon is None:
             return jsonify({'error': 'Missing latitude or longitude'}), 400
         
         # Validate coordinates
-        valid, result = validate_coordinates(data['lat'], data['lon'])
+        valid, result = validate_coordinates(lat, lon)
         if not valid:
             return jsonify({'error': result}), 400
         
@@ -278,12 +282,16 @@ def analyze_region():
     try:
         data = request.get_json()
         
+        # Accept both lat/lon and latitude/longitude formats for compatibility
+        lat = data.get('lat') or data.get('latitude') if data else None
+        lon = data.get('lon') or data.get('longitude') if data else None
+        
         # Validate required fields
-        if not data or 'lat' not in data or 'lon' not in data:
+        if lat is None or lon is None:
             return jsonify({'error': 'Missing latitude or longitude'}), 400
         
         # Validate coordinates
-        valid, result = validate_coordinates(data['lat'], data['lon'])
+        valid, result = validate_coordinates(lat, lon)
         if not valid:
             return jsonify({'error': result}), 400
         
@@ -357,12 +365,16 @@ def predict_discovery_zones():
     try:
         data = request.get_json()
         
+        # Accept both lat/lon and latitude/longitude formats for compatibility
+        lat = data.get('lat') or data.get('latitude') if data else None
+        lon = data.get('lon') or data.get('longitude') if data else None
+        
         # Validate required fields
-        if not data or 'lat' not in data or 'lon' not in data:
+        if lat is None or lon is None:
             return jsonify({'error': 'Missing latitude or longitude'}), 400
         
         # Validate coordinates
-        valid, result = validate_coordinates(data['lat'], data['lon'])
+        valid, result = validate_coordinates(lat, lon)
         if not valid:
             return jsonify({'error': result}), 400
         
