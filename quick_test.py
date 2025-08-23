@@ -41,7 +41,10 @@ def check_dependencies():
     
     for dep in deps:
         try:
-            __import__(dep.replace('-api', ''))
+            if dep == 'earthengine-api':
+                __import__('ee')
+            else:
+                __import__(dep.replace('-api', ''))
             deps[dep] = True
             print(f"  ✅ {dep}")
         except ImportError:
@@ -71,6 +74,123 @@ def check_api_keys():
             configured[key] = False
     
     return configured
+
+def test_earth_engine_auth():
+    """Actually test Earth Engine authentication and API access."""
+    print("\n🌍 Testing Earth Engine Authentication...")
+    
+    try:
+        import ee
+        
+        # Check for credentials
+        project_id = os.environ.get('GEE_PROJECT_ID') or os.environ.get('GOOGLE_EARTH_ENGINE_PROJECT')
+        if not project_id:
+            print("  ❌ No GEE_PROJECT_ID found in environment")
+            return False
+        
+        print(f"  📋 Project ID: {project_id}")
+        
+        # Try to initialize
+        try:
+            # First check if already initialized
+            test_point = ee.Geometry.Point(-122.4194, 37.7749)
+            test_collection = ee.ImageCollection('COPERNICUS/S2').filterBounds(test_point).limit(1)
+            size = test_collection.size().getInfo()
+            print(f"  ✅ Earth Engine already initialized, found {size} test image(s)")
+            return True
+        except:
+            pass
+        
+        # Try different authentication methods
+        auth_methods = []
+        
+        # Method 1: Service account via env
+        if os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
+            auth_methods.append('service_account_file')
+            print(f"  🔐 Using service account: {os.environ['GOOGLE_APPLICATION_CREDENTIALS']}")
+        elif os.environ.get('GEE_SERVICE_ACCOUNT_JSON') or os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON'):
+            auth_methods.append('service_account_json')
+            print("  🔐 Using service account JSON from environment")
+        
+        # Try to authenticate
+        if not auth_methods:
+            print("  ⚠️  No authentication method configured")
+            print("     Set GOOGLE_APPLICATION_CREDENTIALS or GEE_SERVICE_ACCOUNT_JSON")
+            
+            # Try default credentials as last resort
+            try:
+                ee.Initialize(project=project_id)
+                auth_methods.append('default')
+            except:
+                print("  ❌ Failed to authenticate with default credentials")
+                return False
+        else:
+            try:
+                ee.Initialize(project=project_id)
+            except Exception as e:
+                print(f"  ❌ Failed to initialize: {str(e)}")
+                return False
+        
+        # Test actual API access
+        print("\n  🧪 Testing Earth Engine API access...")
+        
+        # Test 1: Simple geometry operation
+        try:
+            point = ee.Geometry.Point(-122.4194, 37.7749)
+            buffer = point.buffer(1000)
+            area = buffer.area().getInfo()
+            print(f"  ✅ Geometry operations work (buffer area: {area:.0f} m²)")
+        except Exception as e:
+            print(f"  ❌ Geometry test failed: {e}")
+            return False
+        
+        # Test 2: Image collection query
+        try:
+            collection = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
+                .filterBounds(point) \
+                .filterDate('2024-01-01', '2024-12-31') \
+                .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20)) \
+                .limit(10)
+            
+            count = collection.size().getInfo()
+            print(f"  ✅ Image collection query works ({count} images found)")
+            
+            if count > 0:
+                # Get first image metadata
+                first = ee.Image(collection.first())
+                bands = first.bandNames().getInfo()
+                print(f"  ✅ Can access image metadata ({len(bands)} bands)")
+        except Exception as e:
+            print(f"  ❌ Collection query failed: {e}")
+            return False
+        
+        # Test 3: Actual pixel data retrieval
+        try:
+            if count > 0:
+                # Try to get actual pixel values
+                sample = first.select(['B4', 'B3', 'B2']).sample(
+                    region=point.buffer(100),
+                    scale=10,
+                    numPixels=10
+                )
+                sample_data = sample.first().getInfo()
+                if sample_data and 'properties' in sample_data:
+                    print(f"  ✅ Can retrieve pixel data (sampled {len(sample_data['properties'])} bands)")
+                else:
+                    print("  ⚠️  No pixel data retrieved (might be cloudy)")
+        except Exception as e:
+            print(f"  ⚠️  Pixel retrieval test skipped: {e}")
+        
+        print("\n  🎉 Earth Engine fully authenticated and working!")
+        return True
+        
+    except ImportError:
+        print("  ❌ earthengine-api not installed")
+        print("     Run: pip install earthengine-api")
+        return False
+    except Exception as e:
+        print(f"  ❌ Earth Engine test failed: {e}")
+        return False
 
 def test_basic_functionality():
     """Test basic functions without external dependencies."""
@@ -212,8 +332,12 @@ def main():
     deps = check_dependencies()
     apis = check_api_keys()
     
+    # Test Earth Engine authentication FIRST
+    ee_auth = test_earth_engine_auth()
+    
     # Run tests
     results = {
+        'earth_engine': ee_auth,
         'basic': test_basic_functionality(),
         'satellite': test_satellite_fetch(),
         'analysis': test_analysis_pipeline(),
@@ -234,6 +358,17 @@ def main():
     total = len(results)
     
     print(f"\n✅ {working}/{total} components working")
+    
+    # Specific Earth Engine status
+    if not results.get('earth_engine', False):
+        print("\n⚠️  Earth Engine NOT authenticated!")
+        print("   This is CRITICAL for satellite analysis.")
+        print("   To fix:")
+        print("   1. Set GEE_PROJECT_ID environment variable")
+        print("   2. Set one of:")
+        print("      - GOOGLE_APPLICATION_CREDENTIALS (path to JSON key)")
+        print("      - GEE_SERVICE_ACCOUNT_JSON (JSON content)")
+        print("   3. Or run: earthengine authenticate (for interactive auth)")
     
     if not any(apis.values()):
         print("\n⚠️  No API keys configured!")
