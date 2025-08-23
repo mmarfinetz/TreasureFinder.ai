@@ -99,3 +99,7 @@ prompt.txt
 .env*
 *credentials*
 service-account*.json
+railway_gee_env.txt
+key.decoded.json
+/app/gee_sa.json
+gee_sa.json

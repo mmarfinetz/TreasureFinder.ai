@@ -10,20 +10,12 @@ import sys
 # Force production mode
 os.environ['PRODUCTION_MODE'] = 'true'
 
-# Helper to interpret environment flags strictly
-def _env_flag_is_true(var_name: str) -> bool:
-    value = os.environ.get(var_name)
-    if value is None:
-        return False
-    normalized = str(value).strip().lower()
-    return normalized in ("1", "true", "yes", "on")
-
-# Verify no test/debug flags (treat "false"/"0"/"off" as not set)
-assert not _env_flag_is_true('ALLOW_TEST_MODE'), \
+# Verify no test/debug flags
+assert not os.environ.get('ALLOW_TEST_MODE'), \
     'TEST MODE detected - remove for production'
-assert not _env_flag_is_true('DEBUG'), \
+assert not os.environ.get('DEBUG'), \
     'DEBUG flag detected - remove for production'
-assert not _env_flag_is_true('MOCK_DATA'), \
+assert not os.environ.get('MOCK_DATA'), \
     'MOCK_DATA flag detected - remove for production'
 
 print('🔒 PRODUCTION MODE ENFORCED')
@@ -37,7 +29,6 @@ Handles conditional imports with fallbacks for optional dependencies.
 """
 import io
 import json
-import base64
 import os
 import random
 import sys
@@ -47,21 +38,9 @@ import traceback
 import warnings
 from collections import defaultdict
 from datetime import datetime, timedelta
+import base64
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
-
-# Runtime mode flag
-production_mode = os.environ.get('PRODUCTION_MODE', '').lower() == 'true'
-# Permit relaxed behavior under pytest to enable fast offline tests
-if 'PYTEST_CURRENT_TEST' in os.environ:
-    production_mode = False
-
-# Optional image processing backend
-try:
-    import cv2  # type: ignore
-    IMAGE_PROCESSING_AVAILABLE = True
-except Exception:
-    IMAGE_PROCESSING_AVAILABLE = False
 
 # Suppress warnings in production
 warnings.filterwarnings('ignore')
@@ -169,170 +148,151 @@ except ImportError:
 try:
     import ee
     EE_AVAILABLE = False
-
-    # Try multiple initialization methods
-    gee_project_env = os.environ.get('GEE_PROJECT_ID')
-    gee_project_alias_env = os.environ.get('GOOGLE_EARTH_ENGINE_PROJECT')
-    project_id = gee_project_env or gee_project_alias_env
-
-    # Optional service account credentials
-    credentials = None
-    # Support multiple env variants for service account JSON content
-    service_json = (
-        os.environ.get('GEE_SERVICE_ACCOUNT_JSON')
-        or os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON')
-        or os.environ.get('GOOGLE_CREDENTIALS_B64')
-        or os.environ.get('GEE_SERVICE_ACCOUNT_JSON_B64')
-    )
-    # Allow base64 encoding to safely store JSON in env vars
-    if service_json:
+    
+    # Check for Docker environment credentials file first
+    credentials_path = '/app/gee_sa.json'
+    if os.path.exists(credentials_path) and not ee.data._initialized:
         try:
-            # Strip whitespace and newlines that Railway might introduce
-            service_json_clean = service_json.strip().replace('\n', '').replace(' ', '')
-            decoded = base64.b64decode(service_json_clean, validate=True).decode('utf-8')
-            service_json = decoded
-            print("🔑 Decoded base64 service account JSON from env")
-        except Exception as b64_err:
-            # Try without stripping in case it's already raw JSON
-            try:
-                json.loads(service_json)  # Validate it's JSON
-                print(f"🔎 Using raw service account JSON from env (not base64 encoded)")
-            except:
-                print(f"⚠️ Service account JSON decode failed: {b64_err}")
-    credentials_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
-    # Non-sensitive diagnostics about env presence
-    try:
-        creds_path_exists = os.path.exists(credentials_path) if credentials_path else False
-        print(
-            f"🔎 EE env: GEE_PROJECT_ID={gee_project_env} "
-            f"GOOGLE_EARTH_ENGINE_PROJECT={gee_project_alias_env} "
-            f"project_id={project_id} sa_json_set={bool(service_json)} "
-            f"creds_path_set={bool(credentials_path)} creds_path_exists={creds_path_exists}"
+            with open(credentials_path, 'r') as f:
+                service_info = json.load(f)
+                sa_email = service_info.get('client_email')
+                project_id = service_info.get('project_id') or os.environ.get('GEE_PROJECT_ID') or os.environ.get('GOOGLE_EARTH_ENGINE_PROJECT')
+                
+                if sa_email:
+                    print(f"🔑 Found service account: {sa_email}")
+                    print(f"🔑 Using credentials file: {credentials_path}")
+                    print(f"🔑 Using project ID: {project_id}")
+                    credentials = ee.ServiceAccountCredentials(sa_email, credentials_path)
+                    ee.Initialize(credentials=credentials, project=project_id)
+                    # Test that it actually works
+                    test_val = ee.Number(1).getInfo()
+                    if test_val == 1:
+                        EE_AVAILABLE = True
+                        print(f"✅ Earth Engine initialized and verified with service account from file: {project_id}")
+        except Exception as e:
+            print(f"⚠️ Failed to initialize EE from file: {e}")
+    
+    # If not initialized yet, try other methods
+    if not EE_AVAILABLE and not ee.data._initialized:
+        # Optional service account credentials from environment
+        credentials = None
+        # Support multiple env variants for service account JSON content
+        service_json = (
+            os.environ.get('GEE_SERVICE_ACCOUNT_JSON')
+            or os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+            or os.environ.get('GOOGLE_CREDENTIALS_B64')
+            or os.environ.get('GEE_SERVICE_ACCOUNT_JSON_B64')
         )
-    except Exception:
-        pass
-    if service_json:
-        try:
-            info = json.loads(service_json)
-            sa_email = info.get('client_email')
-            # Write JSON to a temp file to satisfy ee.ServiceAccountCredentials file-based loading
-            # Use Railway-friendly path or fallback to current dir if /tmp not writable
-            temp_key_path = os.environ.get('GEE_SERVICE_ACCOUNT_JSON_PATH', '/tmp/gee_sa.json')
+        # Allow base64 encoding to safely store JSON in env vars
+        if service_json:
+            try:
+                # Strip whitespace and newlines that Railway might introduce
+                service_json_clean = service_json.strip().replace('\n', '').replace(' ', '')
+                decoded = base64.b64decode(service_json_clean, validate=True).decode('utf-8')
+                service_json = decoded
+                print("🔑 Decoded base64 service account JSON from env")
+            except Exception as b64_err:
+                # Not base64, use as-is
+                pass
             
-            # Check if running in Railway environment
-            if os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RAILWAY_PROJECT_ID'):
-                # Try alternative paths for Railway
-                for path in ['/tmp/gee_sa.json', './gee_sa.json', '/app/gee_sa.json']:
-                    try:
-                        test_path = os.path.dirname(path)
-                        if os.path.exists(test_path) and os.access(test_path, os.W_OK):
-                            temp_key_path = path
-                            break
-                    except:
-                        continue
             try:
-                # Only write if file missing or different to avoid repeated writes
-                write_file = True
-                if os.path.exists(temp_key_path):
-                    try:
-                        with open(temp_key_path, 'r') as existing:
-                            if existing.read().strip() == service_json.strip():
-                                write_file = False
-                    except Exception:
-                        write_file = True
-                if write_file:
-                    with open(temp_key_path, 'w') as f:
-                        f.write(service_json)
-            except Exception as file_err:
-                print(f"⚠️ Could not persist service account JSON to {temp_key_path}: {file_err}")
-                temp_key_path = None
-            if temp_key_path:
-                # Set GOOGLE_APPLICATION_CREDENTIALS for ADC compatibility
-                try:
-                    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_key_path
-                except Exception:
-                    pass
-                credentials = ee.ServiceAccountCredentials(sa_email, temp_key_path)
-                print(f"🔐 Using Earth Engine service account: {sa_email} (from env JSON)")
-        except Exception as cred_err:
-            print(f"⚠️ Failed to load GEE_SERVICE_ACCOUNT_JSON credentials: {cred_err}")
-    elif credentials_path:
-        try:
-            with open(credentials_path) as f:
-                key_data = f.read()
-            info = json.loads(key_data)
-            sa_email = info.get('client_email')
-            credentials = ee.ServiceAccountCredentials(sa_email, credentials_path)
-            print(f"🔐 Using Earth Engine service account: {sa_email} (from file path)")
-        except Exception as cred_err:
-            print(f"⚠️ Failed to load GOOGLE_APPLICATION_CREDENTIALS from path: {cred_err}")
-
-    if project_id:
-        # Method 1: Initialize with project ID
-        try:
-            if credentials:
-                ee.Initialize(credentials=credentials, project=project_id)
-            else:
-                ee.Initialize(project=project_id)
-            EE_AVAILABLE = True
-            print(f"✅ Earth Engine initialized with project: {project_id}")
-        except Exception as e1:
-            # Method 2: Authenticate then initialize (only in Colab)
+                service_info = json.loads(service_json)
+                sa_email = service_info.get('client_email')
+                
+                if sa_email:
+                    # Create temporary file for service account (required by ee.ServiceAccountCredentials)
+                    temp_path = '/tmp/gee_service_account.json'
+                    with open(temp_path, 'w') as f:
+                        json.dump(service_info, f)
+                    
+                    credentials = ee.ServiceAccountCredentials(sa_email, temp_path)
+                    print(f"🔑 Created service account credentials from env: {sa_email}")
+            except Exception as e:
+                print(f"⚠️ Failed to parse service account JSON from env: {e}")
+        
+        # Also check for file-based credentials path
+        credentials_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+        if not credentials and credentials_path and os.path.exists(credentials_path):
             try:
-                # Only authenticate in Colab, never in Railway or production
-                if IN_COLAB and not (os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RAILWAY_PROJECT_ID')):
-                    ee.Authenticate()
+                with open(credentials_path, 'r') as f:
+                    service_info = json.load(f)
+                    sa_email = service_info.get('client_email')
+                    
+                    if sa_email:
+                        credentials = ee.ServiceAccountCredentials(sa_email, credentials_path)
+                        print(f"🔑 Created service account credentials from file: {credentials_path}")
+            except Exception as e:
+                print(f"⚠️ Failed to load service account from file: {e}")
+        
+        # Try multiple initialization methods
+        project_id = os.environ.get('GEE_PROJECT_ID') or os.environ.get('GOOGLE_EARTH_ENGINE_PROJECT')
+        
+        if project_id:
+            # Method 1: Initialize with project ID
+            try:
                 if credentials:
                     ee.Initialize(credentials=credentials, project=project_id)
                 else:
                     ee.Initialize(project=project_id)
                 EE_AVAILABLE = True
-                if IN_COLAB:
-                    print(f"✅ Earth Engine initialized after authentication with project: {project_id}")
-            except Exception as e2:
-                # Method 3: Try without project ID (uses default)
+                print(f"✅ Earth Engine initialized with project: {project_id}")
+            except Exception as e1:
+                # Method 2: Authenticate then initialize (only in Colab)
                 try:
+                    # Only authenticate in Colab, never in Railway or production
+                    if IN_COLAB and not (os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RAILWAY_PROJECT_ID')):
+                        ee.Authenticate()
                     if credentials:
-                        ee.Initialize(credentials=credentials)
+                        ee.Initialize(credentials=credentials, project=project_id)
                     else:
-                        ee.Initialize()
+                        ee.Initialize(project=project_id)
                     EE_AVAILABLE = True
-                    print(f"✅ Earth Engine initialized with default configuration")
-                except Exception as e3:
-                    warnings.warn("Earth Engine authentication and initialization failed.")
-                    EE_AVAILABLE = False
-                    print(f"⚠️ Earth Engine initialization failed:")
-                    print(f"   Method 1 (direct): {e1}")
-                    print(f"   Method 2 (with auth): {e2}")
-                    print(f"   Method 3 (default): {e3}")
-    else:
-        # No project ID, try default initialization
-        try:
-            if credentials:
-                ee.Initialize(credentials=credentials)
-            else:
-                ee.Initialize()
-            EE_AVAILABLE = True
-            print(f"✅ Earth Engine initialized with default configuration")
-        except Exception as e1:
+                    if IN_COLAB:
+                        print(f"✅ Earth Engine initialized after authentication with project: {project_id}")
+                except Exception as e2:
+                    # Method 3: Try without project ID (uses default)
+                    try:
+                        if credentials:
+                            ee.Initialize(credentials=credentials)
+                        else:
+                            ee.Initialize()
+                        EE_AVAILABLE = True
+                        print(f"✅ Earth Engine initialized with default configuration")
+                    except Exception as e3:
+                        warnings.warn("Earth Engine authentication and initialization failed.")
+                        EE_AVAILABLE = False
+                        print(f"⚠️ Earth Engine initialization failed:")
+                        print(f"   Method 1 (direct): {e1}")
+                        print(f"   Method 2 (with auth): {e2}")
+                        print(f"   Method 3 (default): {e3}")
+        else:
+            # No project ID, try default initialization
             try:
-                if IN_COLAB:
-                    ee.Authenticate()
                 if credentials:
                     ee.Initialize(credentials=credentials)
                 else:
                     ee.Initialize()
                 EE_AVAILABLE = True
-                if IN_COLAB:
-                    print(f"✅ Earth Engine initialized after authentication")
-            except Exception as e2:
-                warnings.warn("Earth Engine authentication and initialization failed.")
-                EE_AVAILABLE = False
-                print(f"⚠️ Earth Engine not initialized: {e2}")
-                if not (service_json or credentials_path):
-                    print("   No service account credentials detected. Set GEE_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS.")
-                print("   For local dev, run: earthengine authenticate")
-
+                print(f"✅ Earth Engine initialized with default configuration")
+            except Exception as e1:
+                try:
+                    if IN_COLAB:
+                        ee.Authenticate()
+                    if credentials:
+                        ee.Initialize(credentials=credentials)
+                    else:
+                        ee.Initialize()
+                    EE_AVAILABLE = True
+                    if IN_COLAB:
+                        print(f"✅ Earth Engine initialized after authentication")
+                except Exception as e2:
+                    warnings.warn("Earth Engine authentication and initialization failed.")
+                    EE_AVAILABLE = False
+                    print(f"⚠️ Earth Engine not initialized: {e2}")
+                    if not (service_json or credentials_path):
+                        print("   No service account credentials detected. Set GEE_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS.")
+                    print("   For local dev, run: earthengine authenticate")
+            
 except ImportError:
     EE_AVAILABLE = False
     print("⚠️ Earth Engine not installed")
@@ -472,8 +432,7 @@ Functions for fetching real satellite imagery from Earth Engine or other APIs.
 NO SIMULATED DATA - Will fail if real data sources are unavailable.
 """
 
-def fetch_satellite_image(lat, lon, size=IMAGE_SIZE, lidar_path: Optional[str] = None,
-                          spectral_path: Optional[str] = None):
+def fetch_satellite_image(lat, lon, size=IMAGE_SIZE):
     """
     Fetch real satellite imagery for given coordinates.
     
@@ -483,7 +442,7 @@ def fetch_satellite_image(lat, lon, size=IMAGE_SIZE, lidar_path: Optional[str] =
         size: Image size in pixels
         
     Returns:
-        numpy array of shape (NUM_CHANNELS + extras, size, size)
+        numpy array of shape (NUM_CHANNELS, size, size)
         
     Raises:
         RuntimeError: If no real data source is available
@@ -544,8 +503,7 @@ def fetch_satellite_image(lat, lon, size=IMAGE_SIZE, lidar_path: Optional[str] =
                 
                 # Convert to numpy array
                 import io
-                # Some EE deployments serialize pickled NumPy arrays; allow pickle explicitly
-                data = np.load(io.BytesIO(pixels_response), allow_pickle=True)
+                data = np.load(io.BytesIO(pixels_response))
                 
                 # Handle the returned data structure
                 if isinstance(data, np.ndarray):
@@ -570,7 +528,7 @@ def fetch_satellite_image(lat, lon, size=IMAGE_SIZE, lidar_path: Optional[str] =
                         data = padded
                     
                     print(f"✅ Earth Engine data fetched via computePixels")
-                    return stack_optional_modalities(data, lidar_path, spectral_path, size)
+                    return data
                     
             except Exception as e:
                 print(f"⚠️ computePixels failed: {e}")
@@ -579,11 +537,10 @@ def fetch_satellite_image(lat, lon, size=IMAGE_SIZE, lidar_path: Optional[str] =
                 # FALLBACK: Use reduceRegion for simplified data
                 try:
                     # Sample the region at 10m resolution
-                    # Cap sampling to avoid EE 5000-elements limit
                     sample = image.sample(
                         region=region,
                         scale=10,
-                        numPixels=int(min(size * size, 5000)),
+                        numPixels=size * size,
                         geometries=True
                     )
                     
@@ -627,7 +584,7 @@ def fetch_satellite_image(lat, lon, size=IMAGE_SIZE, lidar_path: Optional[str] =
                             data[i] = np.clip(data[i], 0, 1)
                         
                         print(f"✅ Earth Engine data fetched via sampling")
-                        return stack_optional_modalities(data, lidar_path, spectral_path, size)
+                        return data
                         
                 except Exception as e2:
                     print(f"⚠️ Sampling also failed: {e2}")
@@ -660,7 +617,7 @@ def fetch_satellite_image(lat, lon, size=IMAGE_SIZE, lidar_path: Optional[str] =
                                 data[i] = np.clip(data[i], 0, 1)
                         
                         print(f"⚠️ Using reduced Earth Engine data with spatial modeling")
-                        return stack_optional_modalities(data, lidar_path, spectral_path, size)
+                        return data
                         
                     except Exception as e3:
                         raise RuntimeError(f"All Earth Engine methods failed: {e3}")
@@ -669,45 +626,15 @@ def fetch_satellite_image(lat, lon, size=IMAGE_SIZE, lidar_path: Optional[str] =
             print(f"❌ Earth Engine failed: {e}")
             # Try alternative providers
             if REQUESTS_AVAILABLE:
-                return stack_optional_modalities(
-                    fetch_from_alternative_provider(lat, lon, size),
-                    lidar_path,
-                    spectral_path,
-                    size,
-                )
+                return fetch_from_alternative_provider(lat, lon, size)
             else:
                 raise RuntimeError(f"Failed to fetch Earth Engine data: {e}")
     
     elif REQUESTS_AVAILABLE:
         # Try alternative satellite data providers
-        try:
-            return stack_optional_modalities(
-                fetch_from_alternative_provider(lat, lon, size),
-                lidar_path,
-                spectral_path,
-                size,
-            )
-        except Exception as e:
-            if not production_mode:
-                print(f"⚠️ Alternative provider failed: {e}")
-                print("⚠️ Generating synthetic data instead")
-                return stack_optional_modalities(
-                    generate_synthetic_satellite_data(lat, lon, size),
-                    lidar_path,
-                    spectral_path,
-                    size,
-                )
-            raise
+        return fetch_from_alternative_provider(lat, lon, size)
     
     else:
-        if not production_mode:
-            print("⚠️ No satellite providers available - generating synthetic data for testing")
-            return stack_optional_modalities(
-                generate_synthetic_satellite_data(lat, lon, size),
-                lidar_path,
-                spectral_path,
-                size,
-            )
         raise RuntimeError(
             "No satellite data source available. "
             "Please install and configure Earth Engine or provide alternative API credentials."
@@ -744,7 +671,7 @@ def fetch_from_alternative_provider(lat, lon, size=IMAGE_SIZE):
             
             url = (
                 f"https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/"
-                f"{lon},{lat},{zoom}/{width}x{height}"
+                f"{lon},{lat},{zoom}/{width}x{height}@2x"
                 f"?access_token={mapbox_token}"
             )
             
@@ -756,7 +683,6 @@ def fetch_from_alternative_provider(lat, lon, size=IMAGE_SIZE):
             import io
             
             img = Image.open(io.BytesIO(response.content))
-            # No @2x: image should already be size x size
             img_array = np.array(img)
             
             # Convert to expected format (NUM_CHANNELS, size, size)
@@ -806,154 +732,6 @@ def fetch_from_alternative_provider(lat, lon, size=IMAGE_SIZE):
             "  - PLANET_API_KEY for Planet Labs"
         )
 
-
-# ---------------------------------------------------------------------------
-# Modality loading and normalization helpers
-# ---------------------------------------------------------------------------
-
-def register_to_optical(data: np.ndarray, target_shape: Tuple[int, int]) -> np.ndarray:
-    """Resize 2D or CHW arrays to match optical target shape."""
-    if data.shape[-2:] != target_shape:
-        h, w = target_shape
-        if IMAGE_PROCESSING_AVAILABLE:
-            if data.ndim == 2:
-                data = cv2.resize(data, (w, h), interpolation=cv2.INTER_LINEAR)
-            else:
-                data = np.stack([
-                    cv2.resize(b, (w, h), interpolation=cv2.INTER_LINEAR) for b in data
-                ])
-        else:
-            try:
-                from PIL import Image  # lazy import
-            except Exception:
-                # Nearest-neighbor fallback without PIL
-                if data.ndim == 2:
-                    y_idx = (np.linspace(0, data.shape[-2] - 1, h)).astype(int)
-                    x_idx = (np.linspace(0, data.shape[-1] - 1, w)).astype(int)
-                    data = data[np.ix_(y_idx, x_idx)]
-                else:
-                    resized_bands = []
-                    for b in data:
-                        y_idx = (np.linspace(0, b.shape[-2] - 1, h)).astype(int)
-                        x_idx = (np.linspace(0, b.shape[-1] - 1, w)).astype(int)
-                        resized_bands.append(b[np.ix_(y_idx, x_idx)])
-                    data = np.stack(resized_bands)
-                return data
-            if data.ndim == 2:
-                data = np.array(Image.fromarray(data).resize((w, h), Image.BILINEAR))
-            else:
-                data = np.stack([
-                    np.array(Image.fromarray(b).resize((w, h), Image.BILINEAR)) for b in data
-                ])
-    return data
-
-
-def _normalize_minmax(arr: np.ndarray) -> np.ndarray:
-    arr = arr.astype(np.float32)
-    min_val = np.nanmin(arr)
-    max_val = np.nanmax(arr)
-    if max_val > min_val:
-        arr = (arr - min_val) / (max_val - min_val)
-    else:
-        arr[:] = 0
-    return arr
-
-
-def normalize_lidar(data: np.ndarray) -> np.ndarray:
-    return _normalize_minmax(data)
-
-
-def normalize_spectral(data: np.ndarray) -> np.ndarray:
-    data = data.astype(np.float32)
-    if data.ndim == 2:
-        return _normalize_minmax(data)
-    for i in range(data.shape[0]):
-        data[i] = _normalize_minmax(data[i])
-    return data
-
-
-def load_lidar_ndtm(path: str, size: int) -> np.ndarray:
-    if not os.path.exists(path):
-        raise FileNotFoundError(path)
-    try:
-        import rasterio  # type: ignore
-        with rasterio.open(path) as src:
-            lidar = src.read(1)
-    except Exception:
-        lidar = np.load(path)
-        if lidar.ndim == 3:
-            lidar = lidar[0]
-    lidar = register_to_optical(lidar, (size, size))
-    lidar = normalize_lidar(lidar)
-    return lidar[np.newaxis, ...]
-
-
-def load_hyperspectral_tile(path: str, size: int) -> np.ndarray:
-    if not os.path.exists(path):
-        raise FileNotFoundError(path)
-    try:
-        import rasterio  # type: ignore
-        with rasterio.open(path) as src:
-            spectral = src.read()
-    except Exception:
-        spectral = np.load(path)
-        if spectral.ndim == 2:
-            spectral = spectral[np.newaxis, ...]
-        elif spectral.ndim == 3 and spectral.shape[0] > spectral.shape[2]:
-            # convert HWC -> CHW if needed
-            spectral = spectral.transpose(2, 0, 1)
-    spectral = register_to_optical(spectral, (size, size))
-    spectral = normalize_spectral(spectral)
-    return spectral
-
-
-def stack_optional_modalities(base: np.ndarray, lidar_path: Optional[str], spectral_path: Optional[str], size: int) -> np.ndarray:
-    extras: List[np.ndarray] = []
-    if lidar_path:
-        try:
-            extras.append(load_lidar_ndtm(lidar_path, size))
-        except Exception as e:
-            print(f"⚠️ Failed to load LiDAR data: {e}")
-    if spectral_path:
-        try:
-            extras.append(load_hyperspectral_tile(spectral_path, size))
-        except Exception as e:
-            print(f"⚠️ Failed to load hyperspectral data: {e}")
-    if extras:
-        base = np.concatenate([base] + extras, axis=0)
-    return base
-
-
-def generate_synthetic_satellite_data(lat: float, lon: float, size: int = IMAGE_SIZE) -> np.ndarray:
-    """Create simple synthetic satellite-like data for offline/testing.
-
-    Produces NUM_CHANNELS bands with gentle gradients, noise, and blur,
-    clipped to [0, 1]. Seeded by coordinates for determinism.
-    """
-    # Coordinate-based seed
-    seed_val = int((abs(lat) * 1000) + (abs(lon) * 1000)) % (2**31 - 1)
-    rng = np.random.default_rng(seed_val)
-
-    data = np.zeros((NUM_CHANNELS, size, size), dtype=np.float32)
-
-    # Base gradients
-    y = np.linspace(0, 1, size, dtype=np.float32)
-    x = np.linspace(0, 1, size, dtype=np.float32)
-    grid_y, grid_x = np.meshgrid(y, x, indexing='ij')
-
-    for i in range(NUM_CHANNELS):
-        noise = rng.normal(0.0, 0.08, (size, size)).astype(np.float32)
-        band = 0.5 * grid_x + 0.5 * grid_y + noise
-        # Optional light blur if scipy is present
-        try:
-            from scipy import ndimage  # type: ignore
-            band = ndimage.gaussian_filter(band, sigma=1.0)
-        except Exception:
-            pass
-        data[i] = np.clip(band, 0.0, 1.0)
-
-    return data
-
 # Earth Engine Manual Authentication (Colab Only)
 """
 Manual Earth Engine authentication helper for Colab users.
@@ -977,7 +755,7 @@ if IN_COLAB and not EE_AVAILABLE:
         ee.Authenticate()
         
         # Try to initialize after authentication
-        project_id = os.environ.get('GEE_PROJECT_ID') or os.environ.get('GOOGLE_EARTH_ENGINE_PROJECT')
+        project_id = os.environ.get('GEE_PROJECT_ID')
         
         if project_id:
             try:
@@ -1061,7 +839,7 @@ else:
                     size = 256
                     url = (
                         f"https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/"
-                        f"{lon},{lat},{zoom}/{size}x{size}"
+                        f"{lon},{lat},{zoom}/{size}x{size}@2x"
                         f"?access_token={mapbox_token}"
                     )
                     
@@ -1200,7 +978,7 @@ def fetch_from_alternative_provider(lat, lon, size=IMAGE_SIZE):
             
             url = (
                 f"https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/"
-                f"{lon},{lat},{zoom}/{width}x{height}"
+                f"{lon},{lat},{zoom},{width}x{height}@2x"
                 f"?access_token={mapbox_token}"
             )
             
@@ -1212,7 +990,6 @@ def fetch_from_alternative_provider(lat, lon, size=IMAGE_SIZE):
             import io
             
             img = Image.open(io.BytesIO(response.content))
-            # No @2x: image should already be size x size
             img_array = np.array(img)
             
             # Convert to expected format (NUM_CHANNELS, size, size)
@@ -2528,49 +2305,6 @@ def test_combined_analysis():
 print("✅ Combined analysis functions loaded")
 print("Use: combined_analysis(lat, lon, 'both') for full assessment")
 print("Run: test_combined_analysis() to test with known sites")
-
-# Mineral segmentation loader
-def load_mineral_segmenter(in_channels: int = NUM_CHANNELS, num_classes: int = 2):
-    """
-    Load a mineral segmentation model if available.
-
-    Attempts to return a DOFASegmenter from `models.dofa_segmenter`. Falls back to a
-    minimal segmentation network if DOFA cannot be loaded, so the API remains usable.
-    """
-    try:
-        from models.dofa_segmenter import DOFASegmenter  # type: ignore
-        model = DOFASegmenter(in_channels=in_channels, num_classes=num_classes)
-        return model
-    except Exception:
-        if not TORCH_AVAILABLE:
-            raise RuntimeError("PyTorch required for mineral segmentation model")
-
-        class MinimalSegmentationNet(nn.Module):
-            def __init__(self, in_ch: int, classes: int):
-                super().__init__()
-                self.encoder = nn.Sequential(
-                    nn.Conv2d(in_ch, 32, 3, padding=1), nn.ReLU(),
-                    nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(),
-                )
-                self.head = nn.Sequential(
-                    nn.Conv2d(64, 64, 3, padding=1), nn.ReLU(),
-                    nn.Conv2d(64, classes, 1),
-                )
-
-            def forward(self, x: torch.Tensor) -> torch.Tensor:
-                feats = self.encoder(x)
-                return self.head(feats)
-
-            def segment_anomalies(self, image_tensor: torch.Tensor) -> torch.Tensor:
-                self.eval()
-                with torch.no_grad():
-                    if image_tensor.ndim == 3:
-                        image_tensor = image_tensor.unsqueeze(0)
-                    logits = self.forward(image_tensor)
-                    masks = logits.argmax(dim=1)
-                return masks[0] if masks.shape[0] == 1 else masks
-
-        return MinimalSegmentationNet(in_channels, num_classes)
 
 # Region-Wide Scanning for Archaeological Sites AND Geodes
 """
