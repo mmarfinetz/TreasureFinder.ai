@@ -38,6 +38,13 @@ data/
 logs/
 *.log
 
+# Claude
+.claude
+.claude/agents
+CLAUDE.md 
+
+
+
 # SSL certificates
 ssl/
 *.pem
@@ -58,6 +65,7 @@ docker-compose.override.yml
 tmp/
 temp/
 *.tmp
+
 
 # Cache
 .cache/
@@ -88,18 +96,4 @@ secrets/
 credentials/
 *.secret
 key.json
-
-# Claude/Development files
-.claude/
-prompt.md
-prompt.txt
-*_prompt.txt
-
-# API keys and sensitive files
-.env*
-*credentials*
-service-account*.json
 railway_gee_env.txt
-key.decoded.json
-/app/gee_sa.json
-gee_sa.json

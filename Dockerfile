@@ -37,6 +37,7 @@ ENV PATH=/root/.local/bin:$PATH
 
 # Copy application files (except treasure_hunter_module.py initially)
 COPY treasure_api.py .
+COPY gee_lazy_init_patch.py .
 COPY convert_notebook.py .
 COPY frontend/ ./frontend/
 # Copy notebooks needed for conversion
@@ -64,9 +65,9 @@ ENV PYTHONUNBUFFERED=1
 # Expose port
 EXPOSE 5000
 
-# Health check (respect Railway's PORT env)
+# Health check (respect Railway's PORT env) - use lightweight endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-5000}/api/status || exit 1
+    CMD curl -f http://localhost:${PORT:-5000}/healthz || exit 1
 
 # Run with gunicorn for production, binding to dynamic PORT if provided
 # Use fewer workers by default to fit small-memory hosts like Railway free tier

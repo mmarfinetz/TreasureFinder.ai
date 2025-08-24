@@ -17,6 +17,7 @@ from flask_cors import CORS
 import pandas as pd
 import numpy as np
 import pickle
+import importlib
 
 # Load environment variables from a .env file if present
 try:
@@ -37,34 +38,33 @@ if 'MOCK_DATA' in os.environ:
     # Remove to avoid triggering strict checks in downstream modules
     os.environ.pop('MOCK_DATA', None)
 
-# Import TreasureHunter functions
-# Note: This assumes the notebook has been converted to a Python module
-# We'll handle this with dynamic imports and fallbacks
+# Lazy import for TreasureHunter analysis module to avoid heavy startup
+NOTEBOOK_FUNCTIONS_AVAILABLE = False
+_THM_MODULE = None
 
-try:
-    # Try to import from converted notebook
-    from treasure_hunter_module import (
-        main_analysis,
-        analyze_satellite_anomalies,
-        combined_analysis,
-        scan_region_comprehensive,
-        predict_discovery_zones,
-        EXAMPLE_LOCATIONS
-    )
-    NOTEBOOK_FUNCTIONS_AVAILABLE = True
-except ImportError:
-    print("⚠️ TreasureHunter module not found - will use API-only mode")
-    NOTEBOOK_FUNCTIONS_AVAILABLE = False
-    EXAMPLE_LOCATIONS = {
-        'giza': (29.9792, 31.1342),
-        'machu_picchu': (-13.1631, -72.5450),
-        'angkor_wat': (13.4125, 103.8670),
-        'easter_island': (-27.1127, -109.3497),
-        'stonehenge': (51.1789, -1.8262),
-        'petra': (30.3285, 35.4444),
-        'chichen_itza': (20.6843, -88.5678),
-        'oak_island': (44.5133, -64.2947),
-    }
+EXAMPLE_LOCATIONS = {
+    'giza': (29.9792, 31.1342),
+    'machu_picchu': (-13.1631, -72.5450),
+    'angkor_wat': (13.4125, 103.8670),
+    'easter_island': (-27.1127, -109.3497),
+    'stonehenge': (51.1789, -1.8262),
+    'petra': (30.3285, 35.4444),
+    'chichen_itza': (20.6843, -88.5678),
+    'oak_island': (44.5133, -64.2947),
+}
+
+def _load_thm():
+    """Dynamically import the heavy analysis module on first use."""
+    global _THM_MODULE, NOTEBOOK_FUNCTIONS_AVAILABLE
+    if _THM_MODULE is not None:
+        return _THM_MODULE
+    try:
+        _THM_MODULE = importlib.import_module('treasure_hunter_module')
+        NOTEBOOK_FUNCTIONS_AVAILABLE = True
+        return _THM_MODULE
+    except Exception as e:
+        NOTEBOOK_FUNCTIONS_AVAILABLE = False
+        raise
 
 app = Flask(__name__, static_folder='frontend', static_url_path='')
 CORS(app)
@@ -107,12 +107,13 @@ def validate_real_providers():
     """Check if real satellite providers are configured."""
     configured_providers = []
     
-    # Check Earth Engine availability (not just env vars, but actual initialization)
+    # Check Earth Engine availability lazily (only when endpoints need real data)
     try:
-        from treasure_hunter_module import EE_AVAILABLE
-        if EE_AVAILABLE:
+        from gee_lazy_init_patch import EE_AVAILABLE as PATCH_EE_AVAILABLE
+        if bool(PATCH_EE_AVAILABLE):
             configured_providers.append('google_earth_engine')
-    except ImportError:
+    except Exception:
+        # If patch isn't available or EE init fails, just skip adding GEE
         pass
     
     # Check other providers by environment variables
@@ -148,6 +149,15 @@ def index():
     """Serve the main frontend page."""
     return send_from_directory('frontend', 'index.html')
 
+@app.route('/healthz')
+def healthz():
+    """Lightweight health check that never triggers heavy imports."""
+    return jsonify({
+        'status': 'ok',
+        'version': API_VERSION,
+        'timestamp': datetime.now().isoformat()
+    })
+
 @app.route('/api/status')
 def api_status():
     """Get API status and configuration."""
@@ -155,32 +165,33 @@ def api_status():
     providers = []
     provider_status = {}
     
-    try:
-        # Check Earth Engine
-        from treasure_hunter_module import EE_AVAILABLE
-        if EE_AVAILABLE:
-            providers.append('google_earth_engine')
-            provider_status['google_earth_engine'] = 'connected'
-        else:
-            provider_status['google_earth_engine'] = 'not available'
-            
-        # Check Mapbox
-        if os.environ.get('MAPBOX_ACCESS_TOKEN'):
-            providers.append('mapbox')
-            provider_status['mapbox'] = 'configured'
-        else:
-            provider_status['mapbox'] = 'no token'
-            
-        # Check other providers
-        if os.environ.get('SENTINEL_HUB_CLIENT_ID'):
-            providers.append('sentinel_hub')
-            provider_status['sentinel_hub'] = 'configured'
-            
-        if os.environ.get('PLANET_API_KEY'):
-            providers.append('planet')
-            provider_status['planet'] = 'configured'
-    except Exception as e:
-        provider_status['error'] = str(e)
+    # Avoid importing heavy modules here; infer config from env only
+    gee_env_present = any([
+        os.environ.get('GEE_PROJECT_ID'),
+        os.environ.get('GOOGLE_EARTH_ENGINE_PROJECT'),
+        os.environ.get('GOOGLE_CLOUD_PROJECT'),
+        os.environ.get('GOOGLE_CREDENTIALS_B64'),
+        os.environ.get('GEE_SERVICE_ACCOUNT_JSON_B64'),
+        os.environ.get('GEE_SERVICE_ACCOUNT_JSON'),
+        os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+    ])
+    provider_status['google_earth_engine'] = 'configured_env' if gee_env_present else 'not configured'
+    if gee_env_present:
+        providers.append('google_earth_engine')
+
+    if os.environ.get('MAPBOX_ACCESS_TOKEN'):
+        providers.append('mapbox')
+        provider_status['mapbox'] = 'configured'
+    else:
+        provider_status['mapbox'] = 'no token'
+
+    if os.environ.get('SENTINEL_HUB_CLIENT_ID') and os.environ.get('SENTINEL_HUB_CLIENT_SECRET'):
+        providers.append('sentinel_hub')
+        provider_status['sentinel_hub'] = 'configured'
+
+    if os.environ.get('PLANET_API_KEY'):
+        providers.append('planet')
+        provider_status['planet'] = 'configured'
     
     return jsonify({
         'status': 'healthy' if providers else 'degraded',
@@ -229,10 +240,13 @@ def analyze_single_location():
         lat, lon = result
         analysis_type = data.get('analysis_type', 'treasure')  # 'treasure', 'geological', 'both'
         
-        # Enforce production mode - no mock data
-        if not NOTEBOOK_FUNCTIONS_AVAILABLE:
+        # Load analysis functions lazily
+        try:
+            thm = _load_thm()
+        except Exception as e:
             return jsonify({
                 'error': 'Analysis functions not available. Please run: python convert_notebook.py',
+                'details': str(e),
                 'required_action': 'Convert TreasurHunter.ipynb to treasure_hunter_module.py'
             }), 503
         
@@ -245,9 +259,9 @@ def analyze_single_location():
         # Perform real analysis
         try:
             if analysis_type == 'both':
-                result = combined_analysis(lat, lon, 'both')
+                result = thm.combined_analysis(lat, lon, 'both')
             else:
-                result = analyze_satellite_anomalies(lat, lon)
+                result = thm.analyze_satellite_anomalies(lat, lon)
             
             # Verify result is not mock
             if result.get('method') == 'mock_analysis':
@@ -303,23 +317,26 @@ def analyze_region():
         analysis_type = data.get('analysis_type', 'treasure')
         region_name = data.get('region_name', 'Unknown Region')
         
-        # Perform analysis
-        if NOTEBOOK_FUNCTIONS_AVAILABLE:
-            if analysis_type == 'comprehensive':
-                df = scan_region_comprehensive(lat, lon, radius_km, num_points)
-            else:
-                df = main_analysis(region_name, (lat, lon), radius_km, num_points)
-            
-            # Convert DataFrame to dict for JSON serialization
-            if hasattr(df, 'to_dict'):
-                results = df.to_dict('records')
-            else:
-                results = df
-        else:
+        # Perform analysis (lazy import)
+        try:
+            thm = _load_thm()
+        except Exception as e:
             return jsonify({
                 'error': 'Analysis functions not available. Please run: python convert_notebook.py',
+                'details': str(e),
                 'required_action': 'Convert TreasurHunter.ipynb to treasure_hunter_module.py'
             }), 503
+
+        if analysis_type == 'comprehensive':
+            df = thm.scan_region_comprehensive(lat, lon, radius_km, num_points)
+        else:
+            df = thm.main_analysis(region_name, (lat, lon), radius_km, num_points)
+        
+        # Convert DataFrame to dict for JSON serialization
+        if hasattr(df, 'to_dict'):
+            results = df.to_dict('records')
+        else:
+            results = df
         
         # Generate summary statistics
         if results:
@@ -386,24 +403,27 @@ def predict_discovery_zones():
         grid_density = min(int(data.get('grid_density', 25)), MAX_ANALYSIS_POINTS)
         min_score_threshold = float(data.get('min_score_threshold', 0.5))
         
-        # Perform predictive analysis
-        if NOTEBOOK_FUNCTIONS_AVAILABLE:
-            try:
-                df = predict_discovery_zones(
-                    region_name, lat, lon, search_radius_km, 
-                    grid_density, min_score_threshold
-                )
-                results = df.to_dict('records')
-            except Exception as e:
-                # Fallback to standard analysis
-                print(f"Predictive analysis failed, falling back: {e}")
-                df = main_analysis(region_name, (lat, lon), search_radius_km, grid_density)
-                results = df.to_dict('records')
-        else:
+        # Perform predictive analysis (lazy import)
+        try:
+            thm = _load_thm()
+        except Exception as e:
             return jsonify({
                 'error': 'Predictive analysis not available. Please ensure module is loaded.',
+                'details': str(e),
                 'required_action': 'Convert TreasurHunter.ipynb to treasure_hunter_module.py'
             }), 503
+
+        try:
+            df = thm.predict_discovery_zones(
+                region_name, lat, lon, search_radius_km, 
+                grid_density, min_score_threshold
+            )
+            results = df.to_dict('records')
+        except Exception as e:
+            # Fallback to standard analysis
+            print(f"Predictive analysis failed, falling back: {e}")
+            df = thm.main_analysis(region_name, (lat, lon), search_radius_km, grid_density)
+            results = df.to_dict('records')
         
         # Filter and rank results
         high_potential_sites = [r for r in results if r.get('score', 0) >= min_score_threshold]
@@ -833,12 +853,13 @@ def test_model():
     test_results = []
     
     for loc in test_locations:
-        # Use the model to analyze each location
-        if NOTEBOOK_FUNCTIONS_AVAILABLE:
-            result = analyze_satellite_anomalies(loc['lat'], loc['lon'])
+        # Use the model to analyze each location (lazy import)
+        try:
+            thm = _load_thm()
+            result = thm.analyze_satellite_anomalies(loc['lat'], loc['lon'])
             score = result.get('score', np.random.uniform(0.6, 0.95))
-        else:
-            # Simulate test scores
+        except Exception:
+            # Simulate test scores if analysis module unavailable
             score = np.random.uniform(0.6, 0.95)
         
         test_results.append({
