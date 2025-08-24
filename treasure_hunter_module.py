@@ -176,43 +176,10 @@ try:
     if not EE_AVAILABLE and not ee.data._initialized:
         # Optional service account credentials from environment
         credentials = None
-        # Support multiple env variants for service account JSON content
-        service_json = (
-            os.environ.get('GEE_SERVICE_ACCOUNT_JSON')
-            or os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON')
-            or os.environ.get('GOOGLE_CREDENTIALS_B64')
-            or os.environ.get('GEE_SERVICE_ACCOUNT_JSON_B64')
-        )
-        # Allow base64 encoding to safely store JSON in env vars
-        if service_json:
-            try:
-                # Strip whitespace and newlines that Railway might introduce
-                service_json_clean = service_json.strip().replace('\n', '').replace(' ', '')
-                decoded = base64.b64decode(service_json_clean, validate=True).decode('utf-8')
-                service_json = decoded
-                print("🔑 Decoded base64 service account JSON from env")
-            except Exception as b64_err:
-                # Not base64, use as-is
-                pass
-            
-            try:
-                service_info = json.loads(service_json)
-                sa_email = service_info.get('client_email')
-                
-                if sa_email:
-                    # Create temporary file for service account (required by ee.ServiceAccountCredentials)
-                    temp_path = '/tmp/gee_service_account.json'
-                    with open(temp_path, 'w') as f:
-                        json.dump(service_info, f)
-                    
-                    credentials = ee.ServiceAccountCredentials(sa_email, temp_path)
-                    print(f"🔑 Created service account credentials from env: {sa_email}")
-            except Exception as e:
-                print(f"⚠️ Failed to parse service account JSON from env: {e}")
         
-        # Also check for file-based credentials path
+        # First check GOOGLE_APPLICATION_CREDENTIALS as a file path
         credentials_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
-        if not credentials and credentials_path and os.path.exists(credentials_path):
+        if credentials_path and os.path.exists(credentials_path):
             try:
                 with open(credentials_path, 'r') as f:
                     service_info = json.load(f)
@@ -223,6 +190,46 @@ try:
                         print(f"🔑 Created service account credentials from file: {credentials_path}")
             except Exception as e:
                 print(f"⚠️ Failed to load service account from file: {e}")
+        
+        # If no file-based credentials, try inline JSON from environment
+        if not credentials:
+            # Support multiple env variants for service account JSON content
+            # Note: GOOGLE_APPLICATION_CREDENTIALS is NOT included here as it should be a file path
+            service_json = (
+                os.environ.get('GEE_SERVICE_ACCOUNT_JSON')
+                or os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+                or os.environ.get('GOOGLE_CREDENTIALS_B64')
+                or os.environ.get('GEE_SERVICE_ACCOUNT_JSON_B64')
+            )
+            
+            if service_json:
+                # Try to decode base64 if it looks like base64
+                try:
+                    # Strip whitespace and newlines that Railway might introduce
+                    service_json_clean = service_json.strip().replace('\n', '').replace(' ', '')
+                    decoded = base64.b64decode(service_json_clean, validate=True).decode('utf-8')
+                    service_json = decoded
+                    print("🔑 Decoded base64 service account JSON from env")
+                except Exception as b64_err:
+                    # Not base64, use as-is
+                    pass
+                
+                # Only try to parse as JSON if it looks like JSON
+                if service_json.strip().startswith('{'):
+                    try:
+                        service_info = json.loads(service_json)
+                        sa_email = service_info.get('client_email')
+                        
+                        if sa_email:
+                            # Create temporary file for service account (required by ee.ServiceAccountCredentials)
+                            temp_path = '/tmp/gee_service_account.json'
+                            with open(temp_path, 'w') as f:
+                                json.dump(service_info, f)
+                            
+                            credentials = ee.ServiceAccountCredentials(sa_email, temp_path)
+                            print(f"🔑 Created service account credentials from env: {sa_email}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to parse service account JSON from env: {e}")
         
         # Try multiple initialization methods
         project_id = os.environ.get('GEE_PROJECT_ID') or os.environ.get('GOOGLE_EARTH_ENGINE_PROJECT')
@@ -933,6 +940,7 @@ else:
         print("4. Try a different provider")
 
 print("\n" + "="*60)
+print("📊 Test complete!")
 
 # Cell 6 - REMOVED DUPLICATE FUNCTION
 """
