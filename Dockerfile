@@ -35,9 +35,8 @@ COPY --from=builder /root/.local /root/.local
 # Make sure scripts in .local are usable
 ENV PATH=/root/.local/bin:$PATH
 
-# Copy application files
+# Copy application files (except treasure_hunter_module.py initially)
 COPY treasure_api.py .
-COPY treasure_hunter_module.py .
 COPY convert_notebook.py .
 COPY frontend/ ./frontend/
 # Copy notebooks needed for conversion
@@ -53,6 +52,9 @@ RUN mkdir -p saved_models logs
 RUN python convert_notebook.py && \
     test -f treasure_hunter_module.py || \
     (echo "ERROR: Failed to generate treasure_hunter_module.py" && exit 1)
+
+# Copy the patched treasure_hunter_module.py to overwrite the auto-generated one
+COPY treasure_hunter_module.py .
 
 # Set environment variables
 ENV PRODUCTION_MODE=true
