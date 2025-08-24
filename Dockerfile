@@ -72,4 +72,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # Run with gunicorn for production, binding to dynamic PORT if provided
 # Use fewer workers by default to fit small-memory hosts like Railway free tier
 # Override via env: WORKERS, THREADS
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers ${WORKERS:-1} --threads ${THREADS:-2} --timeout 120 --log-level info treasure_api:app"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers ${WORKERS:-1} --threads ${THREADS:-2} --timeout 300 --log-level info treasure_api:app"]
