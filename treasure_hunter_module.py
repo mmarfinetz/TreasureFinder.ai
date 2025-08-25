@@ -2026,12 +2026,17 @@ def analyze_region(center_lat, center_lon, radius_km=10, num_points=20):
     
     results = []
     
-    # Generate deterministic search grid
-    angles = np.linspace(0, 2 * np.pi, num_points)
-    # Use evenly spaced distances instead of random
-    distances = np.linspace(radius_km * 0.2, radius_km, num_points)
+    # Generate deterministic Fibonacci (golden‑angle) disk sampling for uniform coverage
+    N = max(1, int(num_points))
+    phi = (1.0 + np.sqrt(5.0)) / 2.0
+    golden_angle = 2.0 * np.pi * (1.0 - 1.0 / phi)  # ~2.399963
     
-    for i, (angle, dist) in enumerate(zip(angles, distances)):
+    for i in range(N):
+        # Radius grows as sqrt to keep density uniform across area
+        frac = (i + 0.5) / float(N)
+        dist = radius_km * np.sqrt(frac)
+        angle = i * golden_angle
+        
         # Calculate offset in degrees (approximate)
         lat_offset = (dist / 111.0) * np.cos(angle)  # 111 km per degree latitude
         lon_offset = (dist / (111.0 * np.cos(np.radians(center_lat)))) * np.sin(angle)
@@ -2039,7 +2044,7 @@ def analyze_region(center_lat, center_lon, radius_km=10, num_points=20):
         lat = center_lat + lat_offset
         lon = center_lon + lon_offset
         
-        print(f"\n📍 Point {i+1}/{num_points}: ({lat:.4f}, {lon:.4f})")
+        print(f"\n📍 Point {i+1}/{N}: ({lat:.4f}, {lon:.4f})")
         
         # Analyze location
         analysis = analyze_satellite_anomalies(lat, lon)
