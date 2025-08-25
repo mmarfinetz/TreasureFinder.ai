@@ -1,0 +1,112 @@
+# Hyperparameter Configuration for Enhanced CNN Training
+# Use with train_enhanced.py for optimal performance
+
+# Model Architecture
+model:
+  type: "custom"  # Options: custom, resnet, efficientnet
+  dropout_rate: 0.3  # Dropout probability (0.2-0.5 recommended)
+  use_attention: true  # Enable attention modules
+  use_residual: true  # Enable residual connections
+  
+# Training Parameters
+training:
+  batch_size: 32  # Adjust based on GPU memory (16-64)
+  epochs: 100  # Maximum epochs (early stopping will prevent overfitting)
+  initial_lr: 0.0003  # Initial learning rate (1e-4 to 1e-3)
+  weight_decay: 0.0001  # L2 regularization (1e-5 to 1e-3)
+  gradient_clip: 1.0  # Gradient clipping value (0.5-5.0)
+  
+# Data Augmentation
+augmentation:
+  enabled: true
+  horizontal_flip: 0.5  # Probability of horizontal flip
+  vertical_flip: 0.5  # Probability of vertical flip
+  rotation_degrees: 15  # Max rotation angle
+  color_jitter:
+    brightness: 0.2
+    contrast: 0.2
+    saturation: 0.2
+    hue: 0.1
+  random_affine:
+    translate: [0.1, 0.1]  # Translation range
+    scale: [0.9, 1.1]  # Scale range
+  mixup_alpha: 0.2  # Mixup augmentation strength (0=disabled)
+  
+# Loss Function
+loss:
+  type: "focal"  # Options: focal, cross_entropy, weighted_ce
+  focal_alpha: 1.0  # Focal loss alpha parameter
+  focal_gamma: 2.0  # Focal loss gamma parameter
+  label_smoothing: 0.1  # Label smoothing factor (0=disabled)
+  
+# Learning Rate Schedule
+scheduler:
+  type: "cosine_annealing_warm_restarts"  # Options: cosine, plateau, exponential
+  T_0: 10  # Initial restart period for cosine annealing
+  T_mult: 2  # Period multiplier after each restart
+  eta_min: 0.000001  # Minimum learning rate
+  patience: 5  # Patience for ReduceLROnPlateau
+  
+# Early Stopping
+early_stopping:
+  enabled: true
+  patience: 15  # Number of epochs without improvement
+  min_delta: 0.0001  # Minimum change to qualify as improvement
+  
+# Data Processing
+data:
+  image_size: 128  # Input image size (64-256)
+  normalize: true  # Apply normalization
+  calculate_stats: true  # Calculate dataset statistics
+  num_workers: 4  # DataLoader workers
+  
+# Class Balancing
+class_balance:
+  use_weighted_sampling: true  # Use weighted random sampling
+  use_class_weights: true  # Apply class weights to loss function
+  
+# Validation
+validation:
+  val_split: 0.2  # Validation split if no separate val set
+  track_per_class: true  # Track per-class metrics
+  
+# Best Practices for Different Scenarios
+
+# For Small Datasets (<1000 samples):
+small_dataset_config:
+  batch_size: 16
+  epochs: 150
+  initial_lr: 0.0001
+  dropout_rate: 0.5
+  augmentation_strength: "high"
+  mixup_alpha: 0.4
+  label_smoothing: 0.15
+  
+# For Imbalanced Datasets:
+imbalanced_config:
+  use_focal_loss: true
+  focal_gamma: 3.0
+  use_weighted_sampling: true
+  augment_minority_classes: true
+  
+# For Large Datasets (>10000 samples):
+large_dataset_config:
+  batch_size: 64
+  epochs: 50
+  initial_lr: 0.001
+  dropout_rate: 0.2
+  use_mixed_precision: true
+  gradient_accumulation_steps: 2
+  
+# GPU Memory Optimization:
+memory_optimization:
+  gradient_checkpointing: false  # Enable for very deep models
+  mixed_precision: false  # Use FP16 training
+  gradient_accumulation: 1  # Steps before optimizer update
+  
+# Monitoring and Logging
+monitoring:
+  tensorboard: true  # Enable TensorBoard logging
+  checkpoint_every_n_epochs: 5  # Save checkpoints periodically
+  log_frequency: 10  # Log every N batches
+  save_best_only: true  # Only keep best model checkpoint

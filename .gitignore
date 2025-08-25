@@ -22,9 +22,12 @@ ENV/
 saved_models/
 *.pkl
 *.pth
+*.pt
 *.h5
 *.ckpt
 *.safetensors
+checkpoints/
+weights/
 
 # Data files
 data/
@@ -97,3 +100,4 @@ credentials/
 *.secret
 key.json
 railway_gee_env.txt
+gee_service_account_b64.txt

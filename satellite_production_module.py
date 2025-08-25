@@ -293,6 +293,8 @@ def extract_satellite_features(lat: float, lon: float, radius_m: int = 500) -> D
 		.filterBounds(buffer)
 		.filterDate('2021-01-01', '2024-12-31')
 		.filter(ee.Filter.lt('CLOUD_COVER', 20))
+		.sort('CLOUD_COVER')
+		.limit(50)
 		.median())
 	
 	if landsat.bandNames().size().getInfo() == 0:

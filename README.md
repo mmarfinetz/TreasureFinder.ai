@@ -1,3 +1,32 @@
+## DOFA Segmenter Usage
+
+Environment flags:
+- `USE_DOFA=true|false` (default false)
+- `DOFA_BACKBONE=tiny|small|base` (default tiny)
+- `DOFA_HUB_REPO=DofA/DOFA` (default)
+- `DOFA_LOCAL_WEIGHTS=/abs/path/to/dofa.pt` (optional)
+
+API single point:
+```bash
+curl -s -X POST http://localhost:5000/api/analyze/single \
+ -H 'Content-Type: application/json' \
+ -d '{"latitude":44.5133,"longitude":-64.2947,"use_dofa":true,"return_mask":true}' | jq .
+```
+
+Python quick test:
+```python
+import os, treasure_hunter_module as thm
+os.environ['USE_DOFA']='true'
+thm.initialize_earth_engine()
+thm.load_dofa_segmenter()
+res = thm.analyze_satellite_anomalies(44.5133, -64.2947, use_dofa=True, return_mask=True)
+print(res['method'], res['anomaly_score'], 'mask_b64' in res or 'dofa_mask' in res)
+```
+
+Notes:
+- Real-data-only: If imagery is unavailable, DOFA path raises.
+- Deterministic inference: no random seeds in prediction.
+- Performance: GPU is recommended; CPU works for small tiles.
 ## Prerequisites and Dataset Preparation
 
 To experiment with the new DOFA segmenter and geospatial utilities, install the

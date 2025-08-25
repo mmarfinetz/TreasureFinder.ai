@@ -42,15 +42,7 @@ COPY treasure_hunter_module.py .
 COPY convert_notebook.py .
 COPY frontend/ ./frontend/
 
-# Copy the GEE lazy initialization patch
-COPY gee_lazy_init_patch.py .
-
-# Copy fixed API if available
-COPY treasure_api_fixed.py .
-
-# Copy deployment fix script
-COPY railway_deploy_fix.sh .
-RUN chmod +x railway_deploy_fix.sh
+# No longer using lazy initialization - GEE will initialize eagerly
 
 # Copy notebooks needed for conversion
 COPY TreasurHunter.ipynb .
@@ -66,12 +58,6 @@ RUN python convert_notebook.py && \
     test -f treasure_hunter_module.py || \
     (echo "ERROR: Failed to generate treasure_hunter_module.py" && exit 1)
 
-# Apply the fix: Use the fixed API
-RUN if [ -f treasure_api_fixed.py ]; then \
-        cp treasure_api_fixed.py treasure_api.py; \
-        echo "Applied fixed API with lazy GEE init"; \
-    fi
-
 # Set environment variables
 ENV PRODUCTION_MODE=true
 ENV FLASK_APP=treasure_api.py
@@ -86,6 +72,17 @@ EXPOSE 5000
 # Health check with extended start period for GEE init
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
     CMD curl -f http://localhost:${PORT:-5000}/healthz || exit 1
+
+# Build-time credential decoding (Railway provides these as build args)
+ARG GEE_SERVICE_ACCOUNT_JSON
+ARG GEE_PROJECT_ID
+RUN if [ -n "$GEE_SERVICE_ACCOUNT_JSON" ]; then \
+        echo "📝 Decoding GEE credentials at build time..." && \
+        echo "$GEE_SERVICE_ACCOUNT_JSON" | base64 -d > /app/gee_sa.json && \
+        echo "✅ Successfully wrote /app/gee_sa.json ($(stat -c%s /app/gee_sa.json 2>/dev/null || stat -f%z /app/gee_sa.json 2>/dev/null || echo unknown) bytes)"; \
+    fi
+ENV GOOGLE_APPLICATION_CREDENTIALS=/app/gee_sa.json
+ENV GEE_PROJECT_ID=$GEE_PROJECT_ID
 
 # Create startup script that handles credentials
 RUN set -eux; \

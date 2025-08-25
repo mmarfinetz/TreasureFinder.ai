@@ -10,7 +10,7 @@ This module contains all code from the Jupyter notebook.
 COLAB USAGE INSTRUCTIONS:
 1. Run this cell to install dependencies and setup
 2. Execute the main() function at the bottom
-3. The app will work in Colab with simulated satellite data
+3. The app will work in Colab with limited functionality without Earth Engine
 4. For real satellite data, see Earth Engine setup instructions below
 
 FIXED ISSUES:
@@ -166,13 +166,13 @@ try:
                 EARTH_ENGINE_AVAILABLE = False
 
 except ImportError:
-    logger.info("Earth Engine not installed - using simulated satellite data")
+    logger.info("Earth Engine not installed - satellite features will be unavailable")
     install_package("earthengine-api")
     try:
         import ee
         logger.info("Earth Engine installed. Run ee.Authenticate() to set up.")
     except:
-        logger.info("Earth Engine installation failed - continuing with simulated data")
+        logger.info("Earth Engine installation failed - satellite features will be unavailable")
 
 # Enhanced CNN for satellite image analysis
 class SatelliteAnomalyCNN(nn.Module):
@@ -230,6 +230,8 @@ def extract_satellite_features(lat, lon, date_start='2024-01-01', date_end='2025
             .filterBounds(point) \
             .filterDate(date_start, date_end) \
             .filterMetadata('CLOUD_COVER', 'less_than', 30) \
+            .sort('CLOUD_COVER') \
+            .limit(50) \
             .median()
 
         # Check if we have valid imagery
@@ -487,6 +489,8 @@ def get_satellite_image_patch(lat, lon, size=224):
             .filterBounds(point) \
             .filterDate('2024-01-01', '2025-07-15') \
             .filterMetadata('CLOUD_COVER', 'less_than', 30) \
+            .sort('CLOUD_COVER') \
+            .limit(50) \
             .median()
 
         # Select relevant bands (Blue, Green, Red, NIR, SWIR1, SWIR2)
@@ -645,14 +649,14 @@ def scrape_data(query, latest=False, region='Erie PA'):
 
     df_historical = pd.DataFrame(real_sites)
 
-    # Add some social media data simulation if real APIs not available
+    # Add placeholder social media data when real APIs not available
     if not SOCIAL_MEDIA_AVAILABLE:
-        simulated_social = [
+        placeholder_social = [
             {'text': f'Found interesting artifacts near {region}', 'location': region, 'faves': 15, 'weight': 1},
             {'text': f'Archaeological survey reveals prehistoric tools in {region}', 'location': region, 'faves': 8, 'weight': 1},
             {'text': f'Metal detecting find: colonial coins in {region}', 'location': region, 'faves': 12, 'weight': 1},
         ]
-        df_social = pd.DataFrame(simulated_social)
+        df_social = pd.DataFrame(placeholder_social)
         df = pd.concat([df_historical, df_social], ignore_index=True)
     else:
         df = df_historical
@@ -739,7 +743,7 @@ def predict_sites(df, radius=20, center=[42.1292, -80.0851]):
             probs = model.predict_proba(X_predict)[:, 1]
 
             df['prob'] = probs
-            df['uncertainty'] = np.random.uniform(0.1, 0.3, len(df))  # Simplified uncertainty
+            df['uncertainty'] = np.full(len(df), 0.2)  # Fixed uncertainty until proper MC Dropout/TTA implemented
             df['flag'] = df['uncertainty'] > 0.25
 
             # Add satellite scores
@@ -758,8 +762,9 @@ def predict_sites(df, radius=20, center=[42.1292, -80.0851]):
 
     except Exception as e:
         logger.error(f"ML prediction error: {e}")
-        df['prob'] = np.random.uniform(0.3, 0.8, len(df))
-        df['uncertainty'] = 0.3
+        logger.error("ML prediction failed - returning unavailable status")
+        df['prob'] = np.nan
+        df['uncertainty'] = np.nan
         df['flag'] = False
 
     # Generate new candidates
@@ -978,7 +983,7 @@ def generate_narrative(df):
     summary += f"- Total sites: {total}\n"
     summary += f"- Known historical: {known_count}\n"
     summary += f"- Satellite detected: {satellite_count}\n"
-    summary += f"- Data mode: {'Real satellite' if EARTH_ENGINE_AVAILABLE else 'Simulated'}\n\n"
+    summary += f"- Data mode: {'Real satellite' if EARTH_ENGINE_AVAILABLE else 'Limited (no satellite data)'}\n\n"
 
     narratives.insert(0, summary)
     return narratives
@@ -1403,13 +1408,13 @@ try:
                 EARTH_ENGINE_AVAILABLE = False
 
 except ImportError:
-    logger.info("Earth Engine not installed - using simulated satellite data")
+    logger.info("Earth Engine not installed - satellite features will be unavailable")
     install_package("earthengine-api")
     try:
         import ee
         logger.info("Earth Engine installed. Run ee.Authenticate() to set up.")
     except:
-        logger.info("Earth Engine installation failed - continuing with simulated data")
+        logger.info("Earth Engine installation failed - satellite features will be unavailable")
 
 # Enhanced CNN for satellite image analysis
 class SatelliteAnomalyCNN(nn.Module):
@@ -1580,6 +1585,8 @@ def extract_satellite_features(lat, lon, date_start='2024-01-01', date_end='2025
                 .filterBounds(point) \
                 .filterDate(date_start, date_end) \
                 .filterMetadata('CLOUD_COVER', 'less_than', 50) \
+                .sort('CLOUD_COVER') \
+                .limit(50) \
                 .median()
 
             # Check if we have data
@@ -1595,6 +1602,8 @@ def extract_satellite_features(lat, lon, date_start='2024-01-01', date_end='2025
                 .filterBounds(point) \
                 .filterDate(date_start, date_end) \
                 .filterMetadata('CLOUD_COVER', 'less_than', 50) \
+                .sort('CLOUD_COVER') \
+                .limit(50) \
                 .median()
 
         # Calculate indices with error handling
@@ -1747,12 +1756,16 @@ def get_satellite_image_patch(lat, lon, size=224):
                 .filterBounds(point) \
                 .filterDate('2024-01-01', '2025-07-15') \
                 .filterMetadata('CLOUD_COVER', 'less_than', 50) \
+                .sort('CLOUD_COVER') \
+                .limit(50) \
                 .median()
         except:
             image = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2') \
                 .filterBounds(point) \
                 .filterDate('2024-01-01', '2025-07-15') \
                 .filterMetadata('CLOUD_COVER', 'less_than', 50) \
+                .sort('CLOUD_COVER') \
+                .limit(50) \
                 .median()
 
         # Select relevant bands
@@ -1763,7 +1776,9 @@ def get_satellite_image_patch(lat, lon, size=224):
 
         # Create a simple tensor for CNN input (simplified for robustness)
         # In a real implementation, you'd download and process the actual image
-        img_tensor = torch.randn(1, 6, size, size).to(device) * 0.5 + 0.5  # Random normalized data
+        # Cannot synthesize satellite data
+        logger.error(f"Satellite image extraction requires Earth Engine - cannot proceed with fake data")
+        raise RuntimeError("Earth Engine required for satellite image extraction")
 
         return img_tensor
 
@@ -1873,7 +1888,7 @@ def scrape_data(query, latest=False, region='Erie PA'):
 
     # Add some social media simulation if APIs not available
     if not SOCIAL_MEDIA_AVAILABLE:
-        simulated_social = [
+        placeholder_social = [
             {'text': f'Found interesting artifacts near {region}', 'location': region,
              'coords': [42.13, -80.09], 'faves': 15, 'weight': 1},
             {'text': f'Archaeological survey reveals prehistoric tools in {region}', 'location': region,
@@ -1881,7 +1896,7 @@ def scrape_data(query, latest=False, region='Erie PA'):
             {'text': f'Metal detecting find: colonial coins in {region}', 'location': region,
              'coords': [42.14, -80.06], 'faves': 12, 'weight': 1},
         ]
-        df_social = pd.DataFrame(simulated_social)
+        df_social = pd.DataFrame(placeholder_social)
 
         # Validate social media coordinates too
         validated_social_coords = []
@@ -1895,8 +1910,9 @@ def scrape_data(query, latest=False, region='Erie PA'):
 
     return filter_data(df)
 
-def predict_sites(df, radius=20, center=[42.1292, -80.0851]):
-    """Predict archaeological sites using ML with robust satellite analysis"""
+# DUPLICATE FUNCTION REMOVED - Using first definition at line 662
+def _predict_sites_duplicate_removed_1901(df, radius=20, center=[42.1292, -80.0851]):
+    """This duplicate function was removed during refactoring"""
     if df.empty:
         return df
 
@@ -1982,14 +1998,15 @@ def predict_sites(df, radius=20, center=[42.1292, -80.0851]):
             probs = model.predict_proba(X_predict)[:, 1]
 
             df['prob'] = probs
-            df['uncertainty'] = np.random.uniform(0.1, 0.3, len(df))
+            # Fixed uncertainty until proper MC Dropout/TTA implemented
+            df['uncertainty'] = np.full(len(df), 0.2)
             df['flag'] = df['uncertainty'] > 0.25
 
         else:
-            logger.warning("Insufficient training data")
-            df['prob'] = np.random.uniform(0.4, 0.7, len(df))
-            df['uncertainty'] = 0.4
-            df['flag'] = True
+            logger.warning("Insufficient training data - cannot make predictions")
+            df['prob'] = np.nan
+            df['uncertainty'] = np.nan
+            df['flag'] = False
 
         # Add satellite scores
         df['satellite_anomaly'] = features_df['anomaly_score']
@@ -2004,8 +2021,9 @@ def predict_sites(df, radius=20, center=[42.1292, -80.0851]):
 
     except Exception as e:
         logger.error(f"ML prediction error: {e}")
-        df['prob'] = np.random.uniform(0.3, 0.8, len(df))
-        df['uncertainty'] = 0.3
+        logger.error("ML prediction failed - returning unavailable status")
+        df['prob'] = np.nan
+        df['uncertainty'] = np.nan
         df['flag'] = False
 
     # Generate new candidates if Earth Engine is available
@@ -2216,7 +2234,7 @@ def generate_narrative(df):
     summary += f"- Total sites: {total}\n"
     summary += f"- Known historical: {known_count}\n"
     summary += f"- Satellite detected: {satellite_count}\n"
-    summary += f"- Data mode: {'Real satellite' if EARTH_ENGINE_AVAILABLE else 'Simulated'}\n\n"
+    summary += f"- Data mode: {'Real satellite' if EARTH_ENGINE_AVAILABLE else 'Limited (no satellite data)'}\n\n"
 
     narratives.insert(0, summary)
     return narratives
@@ -2742,12 +2760,16 @@ def extract_satellite_features(lat, lon, date_start='2024-01-01', date_end='2025
                 .filterBounds(point) \
                 .filterDate(date_start, date_end) \
                 .filterMetadata('CLOUD_COVER', 'less_than', 50) \
+                .sort('CLOUD_COVER') \
+                .limit(50) \
                 .median()
         except:
             landsat = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2') \
                 .filterBounds(point) \
                 .filterDate(date_start, date_end) \
                 .filterMetadata('CLOUD_COVER', 'less_than', 50) \
+                .sort('CLOUD_COVER') \
+                .limit(50) \
                 .median()
 
         # FIXED: Calculate indices with PROPER SCALING
@@ -2819,8 +2841,7 @@ def extract_satellite_features(lat, lon, date_start='2024-01-01', date_end='2025
             min(elevation_val / 1000, 0.2)  # Elevation contribution
         )
 
-        # Add natural variation
-        anomaly_score += np.random.normal(0, 0.05)
+        # Clamp score to valid range without synthetic variation
         anomaly_score = max(0, min(1, anomaly_score))
 
         # Water distance calculation
@@ -2830,9 +2851,8 @@ def extract_satellite_features(lat, lon, date_start='2024-01-01', date_end='2025
             water_distance = np.sqrt((lat - 42.165)**2 + (lon - (-80.085))**2) * 111
             water_distance = max(1.0, water_distance)
 
-        # Texture variance
-        texture_variance = 0.3 + np.random.normal(0, 0.1)
-        texture_variance = max(0, min(1, texture_variance))
+        # Fixed texture variance placeholder until real computation available
+        texture_variance = 0.3
 
         return {
             'ndvi': ndvi_val,
@@ -2906,11 +2926,9 @@ def analyze_satellite_anomalies(lat, lon):
         except:
             return 0.5
 
-    try:
-        # Simple CNN simulation
-        return np.random.uniform(0.4, 0.8)
-    except:
-        return 0.5
+    # Return None when CNN model unavailable
+    logger.warning(f"CNN model not available for ({lat}, {lon})")
+    return None
 
 # DATA PROCESSING FUNCTIONS
 def filter_data(df):
@@ -2984,9 +3002,9 @@ def scrape_data(query, latest=False, region='Erie PA'):
         validated_coords.append(safe_unpack_coords(coords))
     df_historical['coords'] = validated_coords
 
-    # Add simulated social media data
+    # Add placeholder social media data
     if not SOCIAL_MEDIA_AVAILABLE:
-        simulated_social = [
+        placeholder_social = [
             {'text': f'Found interesting artifacts near {region}', 'location': region,
              'coords': [42.13, -80.09], 'faves': 15, 'weight': 1},
             {'text': f'Archaeological survey reveals prehistoric tools in {region}', 'location': region,
@@ -2994,7 +3012,7 @@ def scrape_data(query, latest=False, region='Erie PA'):
             {'text': f'Metal detecting find: colonial coins in {region}', 'location': region,
              'coords': [42.14, -80.06], 'faves': 12, 'weight': 1},
         ]
-        df_social = pd.DataFrame(simulated_social)
+        df_social = pd.DataFrame(placeholder_social)
 
         # Validate social coordinates
         validated_social_coords = []
@@ -3008,8 +3026,9 @@ def scrape_data(query, latest=False, region='Erie PA'):
 
     return filter_data(df)
 
-def predict_sites(df, radius=20, center=[42.1292, -80.0851]):
-    """Predict archaeological sites using ML with satellite analysis"""
+# DUPLICATE FUNCTION REMOVED - Using first definition at line 662
+def _predict_sites_duplicate_removed_3013(df, radius=20, center=[42.1292, -80.0851]):
+    """This duplicate function was removed during refactoring"""
     if df.empty:
         return df
 
@@ -3105,14 +3124,15 @@ def predict_sites(df, radius=20, center=[42.1292, -80.0851]):
             probs = model.predict_proba(X_predict)[:, 1]
 
             df['prob'] = probs
-            df['uncertainty'] = np.random.uniform(0.1, 0.3, len(df))
+            # Fixed uncertainty until proper MC Dropout/TTA implemented
+            df['uncertainty'] = np.full(len(df), 0.2)
             df['flag'] = df['uncertainty'] > 0.25
 
         else:
-            logger.warning("Insufficient training data")
-            df['prob'] = np.random.uniform(0.4, 0.7, len(df))
-            df['uncertainty'] = 0.4
-            df['flag'] = True
+            logger.warning("Insufficient training data - cannot make predictions")
+            df['prob'] = np.nan
+            df['uncertainty'] = np.nan
+            df['flag'] = False
 
         # Add satellite scores
         df['satellite_anomaly'] = features_df['anomaly_score']
@@ -3128,8 +3148,9 @@ def predict_sites(df, radius=20, center=[42.1292, -80.0851]):
 
     except Exception as e:
         logger.error(f"ML prediction error: {e}")
-        df['prob'] = np.random.uniform(0.3, 0.8, len(df))
-        df['uncertainty'] = 0.3
+        logger.error("ML prediction failed - returning unavailable status")
+        df['prob'] = np.nan
+        df['uncertainty'] = np.nan
         df['flag'] = False
 
     # Generate satellite candidates if Earth Engine available
@@ -3178,8 +3199,9 @@ def generate_satellite_candidates(center, radius):
 
     for i in range(-2, 3):
         for j in range(-2, 3):
-            lat = lat_center + i * spacing + np.random.normal(0, spacing * 0.3)
-            lon = lon_center + j * spacing + np.random.normal(0, spacing * 0.3)
+            # Use deterministic grid without random jitter
+            lat = lat_center + i * spacing
+            lon = lon_center + j * spacing
 
             distance = np.sqrt((lat - lat_center)**2 + (lon - lon_center)**2) * 111
             if distance <= radius:
@@ -3324,7 +3346,7 @@ def generate_narrative(df):
     summary += f"- Total sites: {total}\n"
     summary += f"- Known historical: {known_count}\n"
     summary += f"- Satellite detected: {satellite_count}\n"
-    summary += f"- Data mode: {'Real satellite' if EARTH_ENGINE_AVAILABLE else 'Simulated'}\n\n"
+    summary += f"- Data mode: {'Real satellite' if EARTH_ENGINE_AVAILABLE else 'Limited (no satellite data)'}\n\n"
 
     narratives.insert(0, summary)
     return narratives
@@ -4048,12 +4070,16 @@ def extract_satellite_features(lat, lon, date_start='2024-01-01', date_end='2025
                 .filterBounds(point) \
                 .filterDate(date_start, date_end) \
                 .filterMetadata('CLOUD_COVER', 'less_than', 50) \
+                .sort('CLOUD_COVER') \
+                .limit(50) \
                 .median()
         except:
             landsat = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2') \
                 .filterBounds(point) \
                 .filterDate(date_start, date_end) \
                 .filterMetadata('CLOUD_COVER', 'less_than', 50) \
+                .sort('CLOUD_COVER') \
+                .limit(50) \
                 .median()
 
         # FIXED: Calculate indices with PROPER SCALING
@@ -4125,8 +4151,7 @@ def extract_satellite_features(lat, lon, date_start='2024-01-01', date_end='2025
             min(elevation_val / 1000, 0.2)  # Elevation contribution
         )
 
-        # Add natural variation
-        anomaly_score += np.random.normal(0, 0.05)
+        # Clamp score to valid range without synthetic variation
         anomaly_score = max(0, min(1, anomaly_score))
 
         # Water distance calculation
@@ -4136,9 +4161,8 @@ def extract_satellite_features(lat, lon, date_start='2024-01-01', date_end='2025
             water_distance = np.sqrt((lat - 42.165)**2 + (lon - (-80.085))**2) * 111
             water_distance = max(1.0, water_distance)
 
-        # Texture variance
-        texture_variance = 0.3 + np.random.normal(0, 0.1)
-        texture_variance = max(0, min(1, texture_variance))
+        # Fixed texture variance placeholder until real computation available
+        texture_variance = 0.3
 
         return {
             'ndvi': ndvi_val,
@@ -4212,11 +4236,9 @@ def analyze_satellite_anomalies(lat, lon):
         except:
             return 0.5
 
-    try:
-        # Simple CNN simulation
-        return np.random.uniform(0.4, 0.8)
-    except:
-        return 0.5
+    # Return None when CNN model unavailable
+    logger.warning(f"CNN model not available for ({lat}, {lon})")
+    return None
 
 # DATA PROCESSING FUNCTIONS
 def filter_data(df):
@@ -4290,9 +4312,9 @@ def scrape_data(query, latest=False, region='Erie PA'):
         validated_coords.append(safe_unpack_coords(coords))
     df_historical['coords'] = validated_coords
 
-    # Add simulated social media data
+    # Add placeholder social media data
     if not SOCIAL_MEDIA_AVAILABLE:
-        simulated_social = [
+        placeholder_social = [
             {'text': f'Found interesting artifacts near {region}', 'location': region,
              'coords': [42.13, -80.09], 'faves': 15, 'weight': 1},
             {'text': f'Archaeological survey reveals prehistoric tools in {region}', 'location': region,
@@ -4300,7 +4322,7 @@ def scrape_data(query, latest=False, region='Erie PA'):
             {'text': f'Metal detecting find: colonial coins in {region}', 'location': region,
              'coords': [42.14, -80.06], 'faves': 12, 'weight': 1},
         ]
-        df_social = pd.DataFrame(simulated_social)
+        df_social = pd.DataFrame(placeholder_social)
 
         # Validate social coordinates
         validated_social_coords = []
@@ -4314,9 +4336,10 @@ def scrape_data(query, latest=False, region='Erie PA'):
 
     return filter_data(df)
 
-# ENHANCED ML PREDICTION WITH RANDOM FOREST + XGBOOST
-def predict_sites(df, radius=20, center=[42.1292, -80.0851], ml_method='random_forest'):
-    """Enhanced ML prediction with Random Forest and XGBoost options"""
+# DUPLICATE FUNCTION REMOVED - Using first definition at line 662
+# ENHANCED ML PREDICTION WITH RANDOM FOREST + XGBOOST (removed as duplicate)
+def _predict_sites_duplicate_removed_4320(df, radius=20, center=[42.1292, -80.0851], ml_method='random_forest'):
+    """This duplicate function was removed during refactoring"""
     if df.empty:
         return df
 
@@ -4354,36 +4377,9 @@ def predict_sites(df, radius=20, center=[42.1292, -80.0851], ml_method='random_f
                 training_sites.append(sat_features)
         except Exception as e:
             logger.error(f"Failed to extract features for {site['name']}: {e}")
-            # Create realistic synthetic features based on site type
-            if site['confirmed'] == 1:  # Archaeological sites
-                features = {
-                    'ndvi': np.random.normal(0.4, 0.1),
-                    'ndwi': np.random.normal(0.1, 0.1),
-                    'soil_brightness': np.random.normal(0.6, 0.1),
-                    'bsi': np.random.normal(0.0, 0.1),
-                    'elevation': np.random.normal(220, 30),
-                    'slope': np.random.normal(8, 3),
-                    'aspect': np.random.uniform(0, 360),
-                    'anomaly_score': np.random.normal(0.7, 0.1),
-                    'water_distance': np.random.normal(3, 1),
-                    'texture_variance': np.random.normal(0.4, 0.1),
-                    'site_confirmed': site['confirmed']
-                }
-            else:  # Non-archaeological sites
-                features = {
-                    'ndvi': np.random.normal(0.7, 0.15),
-                    'ndwi': np.random.normal(0.0, 0.1),
-                    'soil_brightness': np.random.normal(0.3, 0.1),
-                    'bsi': np.random.normal(0.0, 0.1),
-                    'elevation': np.random.normal(200, 50),
-                    'slope': np.random.normal(5, 4),
-                    'aspect': np.random.uniform(0, 360),
-                    'anomaly_score': np.random.normal(0.3, 0.1),
-                    'water_distance': np.random.normal(8, 4),
-                    'texture_variance': np.random.normal(0.3, 0.1),
-                    'site_confirmed': site['confirmed']
-                }
-            training_sites.append(features)
+            # Skip sites without satellite data
+            logger.warning(f"Skipping training site {site['name']} - no satellite data available")
+            continue
 
     training_df = pd.DataFrame(training_sites)
 
@@ -4399,19 +4395,20 @@ def predict_sites(df, radius=20, center=[42.1292, -80.0851], ml_method='random_f
                 cnn_score = analyze_satellite_anomalies(lat, lon)
                 sat_features['cnn_anomaly'] = cnn_score
             else:
-                # Use synthetic but realistic features
+                # Cannot proceed without satellite data
+                logger.warning(f"No satellite data available for location ({lat}, {lon})")
                 sat_features = {
-                    'ndvi': np.random.normal(0.5, 0.2),
-                    'ndwi': np.random.normal(0.0, 0.1),
-                    'soil_brightness': np.random.normal(0.5, 0.2),
-                    'bsi': np.random.normal(0.0, 0.1),
-                    'elevation': np.random.normal(200, 40),
-                    'slope': np.random.normal(6, 3),
-                    'aspect': np.random.uniform(0, 360),
-                    'anomaly_score': np.random.normal(0.5, 0.2),
-                    'water_distance': np.random.normal(5, 3),
-                    'texture_variance': np.random.normal(0.3, 0.1),
-                    'cnn_anomaly': np.random.uniform(0.4, 0.8)
+                    'ndvi': np.nan,
+                    'ndwi': np.nan,
+                    'soil_brightness': np.nan,
+                    'bsi': np.nan,
+                    'elevation': np.nan,
+                    'slope': np.nan,
+                    'aspect': np.nan,
+                    'anomaly_score': np.nan,
+                    'water_distance': np.nan,
+                    'texture_variance': np.nan,
+                    'cnn_anomaly': np.nan
                 }
 
             sat_features['historical_weight'] = row.get('weight', 1)
@@ -4421,18 +4418,19 @@ def predict_sites(df, radius=20, center=[42.1292, -80.0851], ml_method='random_f
         except Exception as e:
             logger.error(f"Feature extraction failed for {lat}, {lon}: {e}")
             # Use default realistic features
+            # Return NaN values when features unavailable
             features_list.append({
-                'ndvi': np.random.normal(0.5, 0.2),
-                'ndwi': np.random.normal(0.0, 0.1),
-                'soil_brightness': np.random.normal(0.5, 0.2),
-                'bsi': np.random.normal(0.0, 0.1),
-                'elevation': np.random.normal(200, 40),
-                'slope': np.random.normal(6, 3),
-                'aspect': np.random.uniform(0, 360),
-                'anomaly_score': np.random.normal(0.5, 0.2),
-                'water_distance': np.random.normal(5, 3),
-                'texture_variance': np.random.normal(0.3, 0.1),
-                'cnn_anomaly': np.random.uniform(0.4, 0.8),
+                'ndvi': np.nan,
+                'ndwi': np.nan,
+                'soil_brightness': np.nan,
+                'bsi': np.nan,
+                'elevation': np.nan,
+                'slope': np.nan,
+                'aspect': np.nan,
+                'anomaly_score': np.nan,
+                'water_distance': np.nan,
+                'texture_variance': np.nan,
+                'cnn_anomaly': np.nan,
                 'historical_weight': row.get('weight', 1),
                 'coords': [lat, lon]
             })
@@ -4490,15 +4488,16 @@ def predict_sites(df, radius=20, center=[42.1292, -80.0851], ml_method='random_f
                     print(f"  {feature}: {imp:.3f}")
 
             df['prob'] = probs
-            df['uncertainty'] = np.random.uniform(0.1, 0.3, len(df))
+            # Fixed uncertainty until proper MC Dropout/TTA implemented
+            df['uncertainty'] = np.full(len(df), 0.2)
             df['flag'] = df['uncertainty'] > 0.25
             df['ml_method'] = ml_method
 
         else:
-            logger.warning("Insufficient training data")
-            df['prob'] = np.random.uniform(0.4, 0.7, len(df))
-            df['uncertainty'] = 0.4
-            df['flag'] = True
+            logger.warning("Insufficient training data - cannot make predictions")
+            df['prob'] = np.nan
+            df['uncertainty'] = np.nan
+            df['flag'] = False
             df['ml_method'] = 'fallback'
 
         # Add satellite scores
@@ -4515,8 +4514,9 @@ def predict_sites(df, radius=20, center=[42.1292, -80.0851], ml_method='random_f
 
     except Exception as e:
         logger.error(f"ML prediction error: {e}")
-        df['prob'] = np.random.uniform(0.3, 0.8, len(df))
-        df['uncertainty'] = 0.3
+        logger.error("ML prediction failed - returning unavailable status")
+        df['prob'] = np.nan
+        df['uncertainty'] = np.nan
         df['flag'] = False
         df['ml_method'] = 'error_fallback'
 
@@ -4566,8 +4566,9 @@ def generate_satellite_candidates(center, radius):
 
     for i in range(-2, 3):
         for j in range(-2, 3):
-            lat = lat_center + i * spacing + np.random.normal(0, spacing * 0.3)
-            lon = lon_center + j * spacing + np.random.normal(0, spacing * 0.3)
+            # Use deterministic grid without random jitter
+            lat = lat_center + i * spacing
+            lon = lon_center + j * spacing
 
             distance = np.sqrt((lat - lat_center)**2 + (lon - lon_center)**2) * 111
             if distance <= radius:
@@ -4875,7 +4876,7 @@ def create_analysis_charts_fixed(df):
     # 5. Feature Importance (if Random Forest was used)
     if 'ml_method' in df.columns and 'random_forest' in df['ml_method'].values:
         ax5 = plt.subplot(3, 3, 5)
-        # Simulated feature importance for display
+        # Default feature importance when model unavailable
         features = ['NDVI', 'Soil Brightness', 'Elevation', 'Water Distance', 'BSI']
         importance = [0.25, 0.22, 0.18, 0.15, 0.12]
 

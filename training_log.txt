@@ -1,0 +1,9 @@
+Using device: cpu
+Classes (3): ['roundhouse', 'shieling', 'smallcairn']
+Train samples: 5840 | Val samples: 580
+
+Starting training...
+============================================================
+
+Epoch 1/50
+----------------------------------------

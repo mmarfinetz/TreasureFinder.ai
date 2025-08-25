@@ -16,6 +16,15 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 
 # Check GPU availability
+try:
+    TORCH_AVAILABLE
+except NameError:
+    try:
+        import torch  # type: ignore
+        TORCH_AVAILABLE = True
+    except Exception:
+        TORCH_AVAILABLE = False
+
 if TORCH_AVAILABLE:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"🎮 Using device: {device}")
@@ -67,44 +76,34 @@ def create_training_dataset(num_samples=1000):
         for _ in range(samples_per_site):
             try:
                 # Fetch real satellite data
-                img_data = fetch_satellite_image(lat + np.random.randn()*0.01, 
-                                                lon + np.random.randn()*0.01, 
+                # Use deterministic offset for reproducibility
+                offset = (_ - samples_per_site/2) * 0.002
+                img_data = fetch_satellite_image(lat + offset, 
+                                                lon + offset, 
                                                 size=IMAGE_SIZE)
                 X_data.append(img_data)
                 y_data.append(1)  # Positive label
-            except:
-                # If fetch fails, create synthetic data with archaeological patterns
-                img = np.random.randn(NUM_CHANNELS, IMAGE_SIZE, IMAGE_SIZE) * 0.1 + 0.5
-                # Add geometric patterns (simulating structures)
-                for c in range(NUM_CHANNELS):
-                    # Add edges
-                    img[c, 50:200, 50:200] += 0.2
-                    img[c, 100:150, 100:150] -= 0.1
-                    # Add linear features
-                    img[c, 120:130, :] += 0.15
-                    img[c, :, 120:130] += 0.15
-                img = np.clip(img, 0, 1)
-                X_data.append(img.astype(np.float32))
-                y_data.append(1)
+            except Exception as e:
+                # If fetch fails, skip this sample - training requires real data
+                print(f"Warning: Failed to fetch satellite data for ({lat}, {lon}): {e}")
+                continue
     
     # Generate negative samples
     for lat, lon in non_sites:
         for _ in range(samples_per_site):
             try:
                 # Fetch real satellite data
-                img_data = fetch_satellite_image(lat + np.random.randn()*0.01,
-                                                lon + np.random.randn()*0.01,
+                # Use deterministic offset for reproducibility
+                offset = (_ - samples_per_site/2) * 0.002
+                img_data = fetch_satellite_image(lat + offset,
+                                                lon + offset,
                                                 size=IMAGE_SIZE)
                 X_data.append(img_data)
                 y_data.append(0)  # Negative label
-            except:
-                # If fetch fails, create synthetic natural/urban patterns
-                img = np.random.randn(NUM_CHANNELS, IMAGE_SIZE, IMAGE_SIZE) * 0.15 + 0.5
-                # Add noise (natural variation)
-                noise = np.random.randn(NUM_CHANNELS, IMAGE_SIZE, IMAGE_SIZE) * 0.05
-                img = np.clip(img + noise, 0, 1)
-                X_data.append(img.astype(np.float32))
-                y_data.append(0)
+            except Exception as e:
+                # If fetch fails, skip this sample - training requires real data
+                print(f"Warning: Failed to fetch satellite data for ({lat}, {lon}): {e}")
+                continue
     
     X = np.array(X_data, dtype=np.float32)
     y = np.array(y_data, dtype=np.float32)

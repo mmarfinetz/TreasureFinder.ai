@@ -10,28 +10,46 @@ This repository contains Jupyter notebooks for satellite imagery analysis and ge
 
 ## Quick Start
 
-### Minimal Setup (Google Colab)
-```python
-# 1. Add Mapbox token in Colab secrets (🔑 icon)
-# Secret name: MAPBOX_ACCESS_TOKEN
-# Secret value: your_mapbox_token
+### Production Quick Start (Local)
+```bash
+cd /Users/mitch/Desktop/Organized/Compare_Satellite_scripts
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip setuptools wheel
+pip install -r requirements.txt
 
-# 2. Run analysis
-from treasure_hunter_module import *
-results = main_analysis('Test Location', (37.7749, -122.4194))
+# Convert notebook to module (required)
+python convert_notebook.py
+
+# Run API (development server)
+export PORT=5000
+python treasure_api.py
+
+# Health checks
+curl -s http://localhost:5000/healthz | jq .
+curl -s http://localhost:5000/healthz/gee | jq .   # requires valid GEE creds
 ```
 
-### Full Setup (with Earth Engine)
-```python
-# 1. Add secrets in Colab:
-#    - GEE_PROJECT_ID: your-project-id
-#    - GOOGLE_APPLICATION_CREDENTIALS_JSON: {json content}
+### Production Quick Start (Docker)
+```bash
+cd /Users/mitch/Desktop/Organized/Compare_Satellite_scripts
+docker build -t treasurehunter:prod -f Dockerfile.fixed .
 
-# 2. Run geode detection
-from satellite_production_modular_unified import *
-CONFIG = initialize_production_config()
-initialize_earth_engine(CONFIG.google_earth_engine_project)
-result = analyze_location(lat=43.0, lon=-111.0)
+# Run without GEE (lazy init keeps app healthy)
+docker run --rm -p 5000:5000 -e PORT=5000 treasurehunter:prod
+
+# In another terminal
+curl -s http://localhost:5000/healthz | jq .
+curl -i http://localhost:5000/healthz/gee   # 503 until creds provided
+
+# Run with GEE (base64 env variables)
+export GEE_B64=$(sed -n 's/^GEE_SERVICE_ACCOUNT_JSON=//p' railway_gee_env.txt)
+export GEE_PROJECT_ID=$(sed -n 's/^GEE_PROJECT_ID=//p' railway_gee_env.txt)
+docker run --rm -p 5000:5000 \
+  -e PORT=5000 \
+  -e GOOGLE_CREDENTIALS_B64="$GEE_B64" \
+  -e GEE_PROJECT_ID="$GEE_PROJECT_ID" \
+  treasurehunter:prod
 ```
 
 ## Key Components
@@ -71,45 +89,44 @@ python convert_notebook.py
 
 ### Running the Web Application
 ```bash
-# Start Flask API server
+# Local (development server)
 python treasure_api.py
 
-# Or use Docker
-docker-compose up -d
+# Local (production-style via Gunicorn)
+gunicorn --bind 0.0.0.0:5000 --workers 1 --threads 2 --timeout 120 treasure_api:app
 
-# Deploy to cloud
-./deploy_aws.sh launch    # AWS
-./deploy_gcp.sh cloudrun  # Google Cloud
+# Docker (preferred for production parity)
+docker build -t treasurehunter:prod -f Dockerfile.fixed .
+docker run --rm -p 5000:5000 -e PORT=5000 treasurehunter:prod
+
+# Health endpoints
+curl -s http://localhost:5000/healthz | jq .          # should be healthy
+curl -s http://localhost:5000/healthz/gee | jq .      # healthy only with valid GEE creds
+curl -s http://localhost:5000/api/status | jq .
 ```
 
 ### Google Earth Engine Authentication
+Production uses a Google Cloud Service Account only (no Colab, no OAuth flows).
 
-#### Method 1: Service Account (Production)
+```bash
+# Option A (recommended): Base64 env for deployment parity
+python railway_gee_fix.py /absolute/path/to/service-account.json
+# Outputs railway_gee_env.txt with:
+#   GEE_SERVICE_ACCOUNT_JSON=<base64>
+#   GEE_PROJECT_ID=<project-id>
+
+export GOOGLE_CREDENTIALS_B64="$(sed -n 's/^GEE_SERVICE_ACCOUNT_JSON=//p' railway_gee_env.txt)"
+export GEE_PROJECT_ID="$(sed -n 's/^GEE_PROJECT_ID=//p' railway_gee_env.txt)"
+
+# Option B: File-based credentials
+export GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+export GEE_PROJECT_ID=<your-project-id>
+```
+
 ```python
-import ee
-import os
-
-# Set credentials
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/path/to/service-account-key.json'
-os.environ['GEE_PROJECT_ID'] = 'your-project-id'
-
-# Initialize
+import ee, os
 ee.Initialize(project=os.environ['GEE_PROJECT_ID'])
 ```
-
-#### Method 2: Interactive OAuth (Development/Colab)
-```python
-import ee
-
-# Authenticate interactively
-ee.Authenticate()
-ee.Initialize(project='your-project-id')
-```
-
-#### Method 3: Google Colab Secrets
-Add secrets in Colab using the 🔑 key icon:
-- `GEE_PROJECT_ID`: Your Google Cloud project ID
-- `GOOGLE_APPLICATION_CREDENTIALS_JSON`: Full JSON key content
 
 ### Running Analysis
 
@@ -214,28 +231,31 @@ trainer.save_model('geode_detection_model.pkl')
 
 ## Testing
 
-### Test Satellite Connectivity
-```python
-# Quick test to verify satellite data access
-TEST_LAT, TEST_LON = 37.7749, -122.4194  # San Francisco
-
-# Test fetch
-image_data = fetch_satellite_image(TEST_LAT, TEST_LON, size=256)
-print(f"Success! Data shape: {image_data.shape}")
+### API Health
+```bash
+curl -s http://localhost:5000/healthz | jq .          # expect status: healthy
+curl -s http://localhost:5000/healthz/gee | jq .      # expect healthy only with valid GEE creds
+curl -s http://localhost:5000/api/status | jq .       # providers reflect configured services
 ```
 
-### Test Analysis Pipeline
-```python
-# Test single location analysis
-result = analyze_satellite_anomalies(TEST_LAT, TEST_LON)
-print(f"Anomaly Score: {result['anomaly_score']:.3f}")
-print(f"Method: {result['method']}")  # 'CNN' or 'statistical'
+### Real Analysis (no mock data)
+```bash
+# Single point analysis
+curl -s -X POST http://localhost:5000/api/analyze/single \
+  -H 'Content-Type: application/json' \
+  -d '{"latitude": 37.7749, "longitude": -122.4194}' | jq .
+
+# Regional analysis
+curl -s -X POST http://localhost:5000/api/analyze/region \
+  -H 'Content-Type: application/json' \
+  -d '{"latitude": 37.7749, "longitude": -122.4194, "radius_km": 10, "num_points": 20}' | jq .
 ```
 
 ## Environment Variables
 
 Required for production:
-- `GOOGLE_EARTH_ENGINE_PROJECT`: GEE project ID
+- `GEE_PROJECT_ID` or `GOOGLE_EARTH_ENGINE_PROJECT`: GEE project ID
+- `GEE_SERVICE_ACCOUNT_JSON` (base64) or `GOOGLE_CREDENTIALS_B64` (base64) or `GOOGLE_APPLICATION_CREDENTIALS` (path)
 - `GEODE_SITES_PATH`: Path to known geode sites CSV
 - `GEODE_MODEL_PATH`: Path to trained ML model (default: 'geode_detection_model.pkl')
 
@@ -250,16 +270,18 @@ Optional API keys:
 ### Common Issues and Solutions
 
 #### Google Earth Engine not connecting
-```python
-# Try manual authentication in Colab
-import ee
-ee.Authenticate()  # Opens OAuth flow
-ee.Initialize(project='your-project-id')
+```bash
+# Verify credentials integrity and generate base64
+python railway_gee_fix.py /absolute/path/to/service-account.json
+cat railway_gee_env.txt
 
-# Verify connection
-point = ee.Geometry.Point(-122.4194, 37.7749)
-collection = ee.ImageCollection('COPERNICUS/S2').filterBounds(point)
-print(f"Found {collection.size().getInfo()} images")
+# Export env and re-run server
+export GOOGLE_CREDENTIALS_B64=$(sed -n 's/^GEE_SERVICE_ACCOUNT_JSON=//p' railway_gee_env.txt)
+export GEE_PROJECT_ID=$(sed -n 's/^GEE_PROJECT_ID=//p' railway_gee_env.txt)
+python treasure_api.py
+
+# Check health endpoints
+curl -s http://localhost:5000/healthz/gee | jq .
 ```
 
 #### No satellite providers available
