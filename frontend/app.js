@@ -58,6 +58,13 @@ function initializeEventListeners() {
     document.getElementById('min-threshold').addEventListener('input', (e) => {
         document.getElementById('threshold-display').textContent = e.target.value;
     });
+
+    // DOFA toggles
+    const useDofa = document.getElementById('use-dofa');
+    const returnMaskGroup = document.getElementById('return-mask-group');
+    useDofa.addEventListener('change', (e) => {
+        returnMaskGroup.style.display = e.target.checked ? 'block' : 'none';
+    });
     
     // Analysis buttons
     document.getElementById('analyze-single-btn').addEventListener('click', analyzeSingleLocation);
@@ -224,7 +231,13 @@ async function analyzeSingleLocation() {
         const response = await fetch(`${API_BASE_URL}/analyze/single`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lat, lon, analysis_type: analysisType })
+            body: JSON.stringify({
+                lat,
+                lon,
+                analysis_type: analysisType,
+                use_dofa: document.getElementById('use-dofa').checked,
+                return_mask: document.getElementById('return-mask').checked
+            })
         });
         
         const data = await response.json();
@@ -544,9 +557,18 @@ function showLocationDetails(result) {
             <ul>
         `;
         for (const [key, value] of Object.entries(result.features)) {
-            content += `<li><strong>${key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> ${(value * 100).toFixed(1)}%</li>`;
+            const val = typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : value;
+            content += `<li><strong>${key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> ${val}</li>`;
         }
         content += `</ul>`;
+    }
+
+    // Optional DOFA mask preview
+    if (result.dofa_mask_b64) {
+        content += `
+            <h4>DOFA Segmentation</h4>
+            <img src="${result.dofa_mask_b64}" alt="DOFA Mask" style="max-width:100%; border:1px solid #444; border-radius:6px;"/>
+        `;
     }
     
     if (result.description) {
