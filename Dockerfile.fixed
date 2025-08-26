@@ -42,6 +42,22 @@ COPY treasure_hunter_module.py .
 COPY convert_notebook.py .
 COPY frontend/ ./frontend/
 
+# Prepare cache and weights directories
+RUN mkdir -p /app/.cache /app/weights && chmod -R 777 /app/.cache /app/weights
+
+# Optional: download DOFA weights at build time (recommended for production)
+# Provide a verified URL and SHA256; defaults are placeholders and should be set
+# via build args in your CI/CD or Railway build settings.
+ARG DOFA_WEIGHTS_URL
+ARG DOFA_WEIGHTS_SHA256
+RUN if [ -n "$DOFA_WEIGHTS_URL" ] && [ -n "$DOFA_WEIGHTS_SHA256" ]; then \
+      echo "Downloading DOFA weights..." && \
+      curl -L -o /app/weights/dofa.pth "$DOFA_WEIGHTS_URL" && \
+      echo "$DOFA_WEIGHTS_SHA256  /app/weights/dofa.pth" | sha256sum -c - ; \
+    else \
+      echo "Skipping DOFA weight download (DOFA_WEIGHTS_URL/SHA256 not provided)" ; \
+    fi
+
 # No longer using lazy initialization - GEE will initialize eagerly
 
 # Copy notebooks needed for conversion
@@ -62,6 +78,10 @@ RUN python convert_notebook.py && \
 ENV PRODUCTION_MODE=true
 ENV FLASK_APP=treasure_api.py
 ENV PYTHONUNBUFFERED=1
+ENV DOFA_LOCAL_WEIGHTS=/app/weights/dofa.pth \
+    USE_DOFA=true \
+    TORCH_HOME=/app/.cache \
+    TORCH_SHOW_DOWNLOAD_PROGRESS=0
 
 # Railway-specific: Mark as Railway environment
 ENV RAILWAY_DEPLOYMENT=true

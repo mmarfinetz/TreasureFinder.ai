@@ -64,6 +64,19 @@ class TestNoSyntheticData(unittest.TestCase):
             mock_fetch.side_effect = RuntimeError("No satellite data source available")
             with self.assertRaises(RuntimeError):
                 _ = analyze_satellite_anomalies(40.0, -74.0, use_dofa=True)
+
+    def test_dofa_requires_local_weights_in_production(self):
+        """With PRODUCTION_MODE=true and USE_DOFA=true and no local weights, DOFA raises a clear error."""
+        # Ensure env flags for production and DOFA
+        with patch.dict(os.environ, { 'PRODUCTION_MODE': 'true', 'USE_DOFA': 'true' }, clear=False):
+            from treasure_hunter_module import analyze_satellite_anomalies, NUM_CHANNELS
+            # Bypass satellite fetch to reach DOFA loader path
+            with patch('treasure_hunter_module.fetch_satellite_image') as mock_fetch:
+                # Provide an image with required channels
+                mock_fetch.return_value = np.zeros((NUM_CHANNELS, 64, 64), dtype=np.float32)
+                with self.assertRaises(RuntimeError) as ctx:
+                    _ = analyze_satellite_anomalies(10.0, 20.0, use_dofa=True)
+                self.assertIn('DOFA_LOCAL_WEIGHTS not set or file missing', str(ctx.exception))
     
     def test_training_fails_without_data(self):
         """Test that model training fails explicitly without real data."""

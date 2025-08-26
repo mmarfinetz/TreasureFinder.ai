@@ -61,6 +61,14 @@ Your app is now running at http://localhost
 docker-compose down
 ```
 
+### DOFA Weights (Production)
+
+- Production requires local DOFA weights. Set `USE_DOFA=true` and point `DOFA_LOCAL_WEIGHTS` to a file inside the container (e.g., `/app/weights/dofa.pth`).
+- To fetch weights at build time, pass build args during `docker build` or in your platform’s build settings:
+  - `--build-arg DOFA_WEIGHTS_URL=<verified URL>`
+  - `--build-arg DOFA_WEIGHTS_SHA256=<sha256>`
+- The Dockerfile creates `/app/.cache` and disables Torch Hub progress logs. No online downloads occur at runtime when `PRODUCTION_MODE=true`.
+
 ## Cloud Deployments
 
 ### AWS Deployment

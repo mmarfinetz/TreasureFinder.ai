@@ -35,11 +35,34 @@ COPY --from=builder /root/.local /root/.local
 # Make sure scripts in .local are usable
 ENV PATH=/root/.local/bin:$PATH
 
+# Prepare cache and weights directories for DOFA
+RUN mkdir -p /app/.cache /app/weights && chmod -R 777 /app/.cache /app/weights
+
+# Optional: download DOFA weights at build time (recommended for production)
+# Provide a verified URL and SHA256 via build args
+ARG DOFA_WEIGHTS_URL
+ARG DOFA_WEIGHTS_SHA256
+ARG HF_TOKEN
+RUN set -e; \
+    if [ -n "$DOFA_WEIGHTS_URL" ] && [ -n "$DOFA_WEIGHTS_SHA256" ]; then \
+      echo "Downloading DOFA weights..."; \
+      if [ -n "$HF_TOKEN" ]; then \
+        curl -L -H "Authorization: Bearer $HF_TOKEN" -H "Accept: application/octet-stream" -o /app/weights/dofa.pth "$DOFA_WEIGHTS_URL"; \
+      else \
+        curl -L -o /app/weights/dofa.pth "$DOFA_WEIGHTS_URL"; \
+      fi; \
+      echo "$DOFA_WEIGHTS_SHA256  /app/weights/dofa.pth" | sha256sum -c -; \
+    else \
+      echo "Skipping DOFA weight download (DOFA_WEIGHTS_URL/SHA256 not provided)"; \
+    fi
+
 # Copy application files (except treasure_hunter_module.py initially)
 COPY treasure_api.py .
 COPY gee_lazy_init_patch.py .
 COPY convert_notebook.py .
 COPY frontend/ ./frontend/
+# DOFA model definitions
+COPY models/ ./models/
 # Copy notebooks needed for conversion
 COPY TreasurHunter.ipynb .
 COPY satellite.ipynb .
@@ -61,6 +84,12 @@ COPY treasure_hunter_module.py .
 ENV PRODUCTION_MODE=true
 ENV FLASK_APP=treasure_api.py
 ENV PYTHONUNBUFFERED=1
+
+# DOFA runtime configuration
+ENV DOFA_LOCAL_WEIGHTS=/app/weights/dofa.pth \
+    USE_DOFA=true \
+    TORCH_HOME=/app/.cache \
+    TORCH_SHOW_DOWNLOAD_PROGRESS=0
 
 # Expose port
 EXPOSE 5000

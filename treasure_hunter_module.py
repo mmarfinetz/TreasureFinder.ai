@@ -3414,19 +3414,31 @@ def _normalize_dofa_backbone(name: 'str') -> 'str':
 def load_dofa_segmenter(
     backbone: str = os.environ.get('DOFA_BACKBONE', 'tiny'),
     hub_repo: str = os.environ.get('DOFA_HUB_REPO', 'DofA/DOFA'),
-    pretrained: bool = True,
     local_path: 'str | None' = os.environ.get('DOFA_LOCAL_WEIGHTS'),
 ) -> 'object':
     """
-    Load DOFA segmenter via Torch Hub or local weights.
-    Must accept input (B, C, H, W) where C == NUM_CHANNELS (8).
-    Returns an eval()-mode module with a .predict(image: np.ndarray) -> np.ndarray method
-    that yields per-class probabilities with shape (num_classes, H, W).
+    Load DOFA segmenter with strict local-weights behavior in production.
+
+    - Production (PRODUCTION_MODE=true): requires DOFA_LOCAL_WEIGHTS to point to
+      an existing file; loading uses only local filesystem and never hits the
+      network. If missing, raises RuntimeError.
+    - Development (PRODUCTION_MODE!=true): allows Torch Hub-based construction
+      when local weights are not supplied. Torch Hub download progress is
+      disabled.
+
+    The returned module is in eval() mode, placed on the selected device, and
+    exposes a predict(image: np.ndarray)->np.ndarray API producing class
+    probabilities with shape (num_classes, H, W).
     """
     global DOFA_AVAILABLE, dofa_segmenter
 
     if not TORCH_AVAILABLE:
         raise RuntimeError('PyTorch is required to load DOFA segmenter')
+
+    # Disable Torch Hub progress globally
+    os.environ.setdefault('TORCH_SHOW_DOWNLOAD_PROGRESS', '0')
+
+    is_production = str(os.environ.get('PRODUCTION_MODE', 'false')).strip().lower() == 'true'
 
     import numpy as _np  # local alias to avoid confusion
     import torch as _torch
@@ -3459,44 +3471,63 @@ def load_dofa_segmenter(
                 return probs[0].detach().cpu().numpy().astype(_np.float32)
 
     try:
-        if local_path and os.path.exists(local_path):
+        # Enforce local-weights-only in production
+        if is_production:
+            if not (local_path and os.path.exists(local_path)):
+                raise RuntimeError('DOFA_LOCAL_WEIGHTS not set or file missing')
+
             obj = torch.load(local_path, map_location=device)
             if isinstance(obj, _nn.Module):
                 core = obj.to(device).eval()
             elif isinstance(obj, dict) and 'model' in obj and isinstance(obj['model'], _nn.Module):
                 core = obj['model'].to(device).eval()
             elif isinstance(obj, dict):
-                # Treat as state_dict (raw or under 'state_dict')
-                try:
+                # In strict production mode, avoid any potential hub/network usage.
+                # State dicts require constructing the architecture; to keep offline,
+                # require a fully-serialized torch.nn.Module checkpoint.
+                raise RuntimeError('Unsupported DOFA checkpoint format in production; provide a serialized torch.nn.Module')
+            else:
+                raise RuntimeError('Local DOFA weights must be a torch.nn.Module, {"model": Module}, or a state_dict dict')
+        else:
+            # Development: prefer local weights if present; else allow hub-backed init
+            core = None
+            if local_path and os.path.exists(local_path):
+                obj = torch.load(local_path, map_location=device)
+                if isinstance(obj, _nn.Module):
+                    core = obj.to(device).eval()
+                elif isinstance(obj, dict) and 'model' in obj and isinstance(obj['model'], _nn.Module):
+                    core = obj['model'].to(device).eval()
+                elif isinstance(obj, dict):
+                    # Treat as state_dict (raw or under 'state_dict')
                     from models.dofa_segmenter import DOFASegmenter as _DOFASegmenter
                     bb = _normalize_dofa_backbone(backbone)
-                    core = _DOFASegmenter(
+                    model_tmp = _DOFASegmenter(
                         backbone=bb,
                         num_classes=2,
                         in_channels=NUM_CHANNELS,
                         hub_repo=hub_repo,
-                        pretrained=pretrained,
+                        pretrained=True,
                     ).to(device).eval()
                     sd = obj.get('state_dict') if 'state_dict' in obj else obj
                     if isinstance(sd, dict):
-                        missing, unexpected = core.load_state_dict(sd, strict=False)
+                        missing, unexpected = model_tmp.load_state_dict(sd, strict=False)
                         logger.info(f"Loaded DOFA state_dict with strict=False; missing={len(missing)}, unexpected={len(unexpected)}")
                     else:
                         raise RuntimeError('Unsupported DOFA checkpoint format')
-                except Exception as e_load:
-                    raise RuntimeError(f'Failed to load DOFA state_dict: {e_load}')
+                    core = model_tmp
+                else:
+                    raise RuntimeError('Local DOFA weights must be a torch.nn.Module, {"model": Module}, or a state_dict dict')
             else:
-                raise RuntimeError('Local DOFA weights must be a torch.nn.Module, {"model": Module}, or a state_dict dict')
-        else:
-            from models.dofa_segmenter import DOFASegmenter as _DOFASegmenter
-            bb = _normalize_dofa_backbone(backbone)
-            core = _DOFASegmenter(
-                backbone=bb,
-                num_classes=2,
-                in_channels=NUM_CHANNELS,
-                hub_repo=hub_repo,
-                pretrained=pretrained,
-            ).to(device).eval()
+                # Last resort in dev: build from torch.hub (no progress logs)
+                from models.dofa_segmenter import DOFASegmenter as _DOFASegmenter
+                bb = _normalize_dofa_backbone(backbone)
+                core = _DOFASegmenter(
+                    backbone=bb,
+                    num_classes=2,
+                    in_channels=NUM_CHANNELS,
+                    hub_repo=hub_repo,
+                    pretrained=True,
+                ).to(device).eval()
 
         # Ensure predict() API exists
         if not hasattr(core, 'predict') or not callable(getattr(core, 'predict', None)):
@@ -3510,45 +3541,17 @@ def load_dofa_segmenter(
         logger.info("✅ DOFA segmenter loaded and ready")
         return dofa_segmenter
     except Exception as e:
+        # No online fallbacks in production; keep errors clear and minimal.
         DOFA_AVAILABLE = False
         dofa_segmenter = None
-        # Fallback: use torchvision FCN-ResNet50 over RGB as a minimal segmenter
-        try:
-            import torchvision
-            import torch.nn as _nn
-            class _RgbToMultispectralAdapter(_nn.Module):
-                def __init__(self, core: _nn.Module):
-                    super().__init__()
-                    self.core = core.eval()
-                    self.num_classes = 2
-                def forward(self, x: _torch.Tensor) -> _torch.Tensor:
-                    # x: (B, C, H, W) with C>=3; take first 3 channels
-                    rgb = x[:, :3, ...]
-                    out = self.core(rgb)['out']  # (B, Ck, H, W) where Ck likely 21
-                    return out
-                def predict(self, tile: _np.ndarray) -> _np.ndarray:
-                    self.eval()
-                    with _torch.no_grad():
-                        if tile.ndim == 2:
-                            tile = tile[_np.newaxis, ...]
-                        if tile.ndim == 3:
-                            tile = tile[_np.newaxis, ...]
-                        x = _torch.from_numpy(tile).float().to(device)
-                        logits_full = self.forward(x)
-                        probs_full = _torch.softmax(logits_full, dim=1)
-                        # Compose binary probs: background vs foreground
-                        p_bg = probs_full[:, 0:1, ...]
-                        p_fg = 1.0 - p_bg
-                        probs2 = _torch.cat([p_bg, p_fg], dim=1)
-                        return probs2[0].detach().cpu().numpy().astype(_np.float32)
-            # Use pretrained weights with default class count; we remap to binary in predict()
-            fcn = torchvision.models.segmentation.fcn_resnet50(weights='DEFAULT').to(device).eval()
-            dofa_segmenter = _RgbToMultispectralAdapter(fcn).to(device).eval()
-            DOFA_AVAILABLE = True
-            logger.info("⚠️ DOFA hub load failed; using torchvision FCN fallback over RGB")
-            return dofa_segmenter
-        except Exception as e2:
-            raise
+        raise
+
+def assert_dofa_ready() -> None:
+    """Raise with a helpful message when DOFA is not initialized/available."""
+    if not DOFA_AVAILABLE or dofa_segmenter is None:
+        raise RuntimeError(
+            'DOFA is not available. Set USE_DOFA=true and provide DOFA_LOCAL_WEIGHTS pointing to a valid weights file, or disable USE_DOFA.'
+        )
 
 def create_training_dataset(num_samples=1000):
     """
@@ -4689,4 +4692,3 @@ def ensemble_predict(
         'features_used': ['p_cnn', 'p_ml'],
         'components': {'cnn_confidence': confidence if not (np.isnan(confidence) if isinstance(confidence, float) else False) else np.nan}
     }
-

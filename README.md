@@ -6,6 +6,16 @@ Environment flags:
 - `DOFA_HUB_REPO=DofA/DOFA` (default)
 - `DOFA_LOCAL_WEIGHTS=/abs/path/to/dofa.pt` (optional)
 
+Production requirements:
+- Set `PRODUCTION_MODE=true` and provide `DOFA_LOCAL_WEIGHTS` pointing to a local weight file in the image or attached volume.
+- In production, online downloads are disabled; Torch Hub is dev-only. Missing local weights cause a clear RuntimeError.
+- Disable Torch Hub progress logs via `TORCH_SHOW_DOWNLOAD_PROGRESS=0` (default in Dockerfile.fixed).
+- Deterministic inference: models run in `eval()` with no per-request seeding.
+
+Railway environment (recommended):
+- Set `USE_DOFA=true` and `DOFA_LOCAL_WEIGHTS=/app/weights/dofa.pth`.
+- Optionally set build args `DOFA_WEIGHTS_URL` and `DOFA_WEIGHTS_SHA256` to fetch weights at build time; see Dockerfile.fixed.
+
 API single point:
 ```bash
 curl -s -X POST http://localhost:5000/api/analyze/single \

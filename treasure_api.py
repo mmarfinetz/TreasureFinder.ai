@@ -68,8 +68,13 @@ def _load_thm():
         # Optionally preload DOFA to avoid first-request latency
         try:
             if str(os.environ.get('USE_DOFA', 'false')).lower() == 'true':
-                if hasattr(_THM_MODULE, 'load_dofa_segmenter'):
-                    _THM_MODULE.load_dofa_segmenter()
+                # Preload only when local weights are present; otherwise warn once
+                weights_path = os.environ.get('DOFA_LOCAL_WEIGHTS')
+                if not weights_path or not os.path.exists(weights_path):
+                    app.logger.warning('USE_DOFA=true but DOFA_LOCAL_WEIGHTS not set or missing; DOFA will be unavailable until weights provided')
+                else:
+                    if hasattr(_THM_MODULE, 'load_dofa_segmenter'):
+                        _THM_MODULE.load_dofa_segmenter()
         except Exception as e:
             # Don't fail startup if DOFA preload fails; it will be attempted on-demand
             app.logger.info(f"DOFA preload skipped: {e}")
@@ -330,6 +335,17 @@ def analyze_single_location():
                 }), 503
                 
         except Exception as e:
+            # If DOFA was requested, return a structured unavailable response
+            if use_dofa:
+                msg = str(e)
+                status_code = 503 if 'DOFA_LOCAL_WEIGHTS not set or file missing' in msg or 'DOFA is not available' in msg else 500
+                return jsonify({
+                    'error': 'DOFA unavailable',
+                    'method': 'DOFA',
+                    'status': 'unavailable',
+                    'reason': msg,
+                    'configured_providers': configured_providers
+                }), status_code
             return jsonify({
                 'error': f'Real analysis failed: {str(e)}',
                 'configured_providers': configured_providers
