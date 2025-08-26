@@ -16,20 +16,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Force production mode
-os.environ['PRODUCTION_MODE'] = 'true'
-
-# Verify no test/debug flags
-assert not os.environ.get('ALLOW_TEST_MODE'), \
-    'TEST MODE detected - remove for production'
-assert not os.environ.get('DEBUG'), \
-    'DEBUG flag detected - remove for production'
-assert not os.environ.get('MOCK_DATA'), \
-    'MOCK_DATA flag detected - remove for production'
-
-logger.info('🔒 PRODUCTION MODE ENFORCED')
-logger.info('✅ No fallbacks or mock data will be used')
-logger.info('✅ All safety checks enabled')
+PRODUCTION_MODE = str(os.environ.get('PRODUCTION_MODE', 'false')).strip().lower() == 'true'
+if PRODUCTION_MODE:
+    # Verify no test/debug flags
+    assert not os.environ.get('ALLOW_TEST_MODE'), 'TEST MODE detected - remove for production'
+    assert not os.environ.get('DEBUG'), 'DEBUG flag detected - remove for production'
+    assert not os.environ.get('MOCK_DATA'), 'MOCK_DATA flag detected - remove for production'
+    logger.info('🔒 PRODUCTION MODE ENABLED')
+    logger.info('✅ No fallbacks or mock data will be used')
+    logger.info('✅ All safety checks enabled')
+else:
+    logger.info('🧪 Development mode active')
 
 # Production Dependencies and Imports
 """
@@ -435,6 +432,36 @@ if TORCH_AVAILABLE:
     satellite_cnn = SatelliteAnomalyCNN()
     satellite_cnn.eval()  # Set to evaluation mode
     print("✅ CNN model initialized")
+    # Production: require trained weights via CNN_WEIGHTS_PATH
+    try:
+        cnn_weights_env = os.environ.get('CNN_WEIGHTS_PATH')
+        if PRODUCTION_MODE:
+            if not (cnn_weights_env and os.path.exists(cnn_weights_env)):
+                # In strict production, disable CNN if no weights provided at import time.
+                # Functions that require CNN must validate availability at call time.
+                satellite_cnn = None
+                logger.warning('CNN_WEIGHTS_PATH not set or missing; CNN disabled in production until weights are provided')
+            else:
+                loaded = load_trained_model(cnn_weights_env)
+                if loaded is None:
+                    raise RuntimeError(f'Failed to load CNN weights from {cnn_weights_env}')
+                satellite_cnn = loaded
+                logger.info(f"Loaded CNN weights from {cnn_weights_env}")
+        else:
+            if cnn_weights_env and os.path.exists(cnn_weights_env):
+                loaded = load_trained_model(cnn_weights_env)
+                if loaded is not None:
+                    satellite_cnn = loaded
+                    logger.info(f"Loaded CNN weights from {cnn_weights_env}")
+                else:
+                    logger.warning(f"CNN_WEIGHTS_PATH set but failed to load from {cnn_weights_env}; using untrained model (development only)")
+            else:
+                logger.warning('Using untrained CNN (development). Provide CNN_WEIGHTS_PATH to load trained weights.')
+    except Exception as e:
+        # In production, surface immediately
+        if PRODUCTION_MODE:
+            raise
+        logger.warning(f"CNN weight initialization warning: {e}")
 else:
     satellite_cnn = None
     print("⚠️ CNN model disabled (PyTorch not available)")
@@ -589,6 +616,12 @@ if TORCH_AVAILABLE:
                 continue
 
         classifier = nn.Sequential(*clf_modules)
+        # Try to infer num_classes from last Linear
+        inferred_classes = None
+        for m in reversed(classifier):
+            if isinstance(m, nn.Linear):
+                inferred_classes = int(m.out_features)
+                break
 
         class ResidualCNNFromConfig(nn.Module):
             def __init__(self, features, classifier):
@@ -606,63 +639,57 @@ if TORCH_AVAILABLE:
         """Construct a generic CNN from checkpoint tensor shapes.
 
         Strategy:
-          - Features: sequential Conv2d layers inferred from 4D 'features.*.weight' tensors (no BN to avoid shape conflicts), ReLU after each, then AdaptiveAvgPool2d(1).
-          - Classifier: Flatten, then Linear layers inferred from 2D 'classifier.*.weight' tensors with ReLU between them (no BN/Dropout) to avoid shape conflicts.
+          - Identify all 4D conv-like weights and build a simple Conv-ReLU stack.
+          - If first conv expects in_channels != NUM_CHANNELS, insert a 1x1 adapter.
+          - Add AdaptiveAvgPool2d(1) before classifier.
+          - Identify all 2D linear weights and build a Linear-ReLU stack.
+          - If no linear weights are found, add a final Linear(last_out, 1) for a binary head.
         """
-        # Identify conv weights in features
+        # Collect conv-like weights in key order
         conv_entries = []
+        idx_ctr = 0
         for k, w in state.items():
-            if k.startswith('features.') and k.endswith('.weight') and isinstance(w, torch.Tensor) and w.ndim == 4:
-                try:
-                    idx = int(k.split('.')[1])
-                except Exception:
-                    idx = 0
-                conv_entries.append((idx, w))
-        conv_entries.sort(key=lambda x: x[0])
+            if isinstance(w, torch.Tensor) and w.ndim == 4 and k.endswith('.weight'):
+                conv_entries.append((idx_ctr, k, w))
+                idx_ctr += 1
 
         feature_modules: list = []
+        input_adapter_added = False
         last_out = None
-        for _, w in conv_entries:
-            out_ch, in_ch, kh, kw = w.shape
-            # Use padding to preserve spatial, stride=1 (unknown from weights)
+        first_in = None
+        for _, k, w in conv_entries:
+            out_ch, in_ch, kh, kw = map(int, w.shape)
+            if first_in is None:
+                first_in = in_ch
+                if first_in != NUM_CHANNELS:
+                    feature_modules.append(nn.Conv2d(NUM_CHANNELS, first_in, kernel_size=1, stride=1, padding=0, bias=False))
+                    input_adapter_added = True
             pad = kh // 2
-            feature_modules.append(nn.Conv2d(int(in_ch), int(out_ch), kernel_size=int(kh), stride=1, padding=pad, bias=False))
+            feature_modules.append(nn.Conv2d(in_ch, out_ch, kernel_size=kh, stride=1, padding=pad, bias=False))
             feature_modules.append(nn.ReLU(inplace=True))
-            last_out = int(out_ch)
+            last_out = out_ch
         feature_modules.append(nn.AdaptiveAvgPool2d((1, 1)))
         features = nn.Sequential(*feature_modules)
 
-        # Identify linear weights in classifier
+        # Collect linear weights in key order
         lin_entries = []
+        idx_ctr = 0
         for k, w in state.items():
-            if k.startswith('classifier.') and k.endswith('.weight') and isinstance(w, torch.Tensor) and w.ndim == 2:
-                try:
-                    idx = int(k.split('.')[1])
-                except Exception:
-                    idx = 0
-                lin_entries.append((idx, w))
-        lin_entries.sort(key=lambda x: x[0])
+            if isinstance(w, torch.Tensor) and w.ndim == 2 and k.endswith('.weight'):
+                lin_entries.append((idx_ctr, k, w))
+                idx_ctr += 1
 
         clf_modules: list = [nn.Flatten()]
-        prev = last_out if last_out is not None else None
-        for i, w in lin_entries:
-            out_f, in_f = w.shape
-            in_f = int(in_f)
-            out_f = int(out_f)
-            # If prev is known and differs from in_f, trust checkpoint's in_f
-            clf_modules.append(nn.Linear(in_f, out_f, bias=True))
-            # Add ReLU except potentially after last layer
-            # Determine if this is last linear (no assumption about next)
-            # We'll add ReLU for all but can be ignored at inference if not needed
-            # (weights load does not depend on presence of ReLU)
-            # Exclude ReLU after final layer by peeking next index
-        # Rebuild with ReLU between linears except last
-        clf_modules = [nn.Flatten()]
-        for j, (i, w) in enumerate(lin_entries):
-            out_f, in_f = w.shape
-            clf_modules.append(nn.Linear(int(in_f), int(out_f), bias=True))
-            if j < len(lin_entries) - 1:
-                clf_modules.append(nn.ReLU(inplace=True))
+        if lin_entries:
+            for j, (_, k, w) in enumerate(lin_entries):
+                out_f, in_f = map(int, w.shape)
+                clf_modules.append(nn.Linear(in_f, out_f, bias=True))
+                if j < len(lin_entries) - 1:
+                    clf_modules.append(nn.ReLU(inplace=True))
+        else:
+            # No classifier weights: add a minimal binary head
+            in_f = int(last_out or first_in or NUM_CHANNELS)
+            clf_modules.append(nn.Linear(in_f, 1, bias=True))
 
         classifier = nn.Sequential(*clf_modules)
 
@@ -675,6 +702,19 @@ if TORCH_AVAILABLE:
                 x = self.features(x)
                 x = self.classifier(x)
                 return x
+
+        # Log summary for observability
+        try:
+            conv_count = sum(1 for m in features if isinstance(m, nn.Conv2d))
+            lin_count = sum(1 for m in classifier if isinstance(m, nn.Linear))
+            msg = f"CNN loader: shape-based generic build — convs={conv_count}, linears={lin_count}, input_adapter={input_adapter_added}"
+            if inferred_classes is not None:
+                msg += f", inferred_num_classes={inferred_classes}"
+            logger.info(msg)
+            if first_in is not None and first_in != NUM_CHANNELS:
+                logger.warning(f"CNN loader: inserted input adapter NUM_CHANNELS={NUM_CHANNELS} -> expected_in={first_in}")
+        except Exception:
+            pass
 
         return GenericCNNFromState(features, classifier)
 
@@ -732,26 +772,60 @@ def fetch_satellite_image(lat, lon, size=IMAGE_SIZE, lidar_path: str = None, spe
             
             # PRIMARY METHOD: computePixels API (newer, more reliable)
             try:
-                # Get image as array using computePixels
-                # This is the modern way to get EE data
-                request = {
-                    'expression': image,
-                    'fileFormat': 'NPY',
-                    'grid': {
-                        'dimensions': {
-                            'width': size,
-                            'height': size
+                # Preferred: compute a true 10m grid in UTM centered on (lat,lon)
+                # Determine UTM zone and EPSG
+                zone = int((float(lon) + 180.0) / 6.0) + 1
+                epsg = 32600 + zone if float(lat) >= 0 else 32700 + zone
+                crs_code = f"EPSG:{epsg}"
+
+                # Compute center in target CRS via EE
+                proj = ee.Projection(crs_code)
+                center_geom = ee.Geometry.Point([lon, lat]).transform(proj, 1)
+                try:
+                    cx, cy = center_geom.coordinates().getInfo()
+                except Exception:
+                    # Fallback to geographic grid at equator approximation
+                    pixel_deg = 10.0 / 111320.0
+                    request = {
+                        'expression': image,
+                        'fileFormat': 'NPY',
+                        'grid': {
+                            'dimensions': { 'width': size, 'height': size },
+                            'affineTransform': {
+                                'scaleX': pixel_deg,
+                                'scaleY': -pixel_deg,
+                                'translateX': float(lon) - pixel_deg * size / 2.0,
+                                'translateY': float(lat) + pixel_deg * size / 2.0,
+                            },
+                            'crsCode': 'EPSG:4326',
                         },
-                        'affineTransform': {
-                            'scaleX': 10.0 / size,  # 10m resolution scaled to image size
-                            'scaleY': -10.0 / size,
-                            'translateX': lon - (5.0 / size),
-                            'translateY': lat + (5.0 / size)
-                        },
-                        'crsCode': 'EPSG:4326'
                     }
-                }
-                
+                    logger.info(
+                        f"EE grid: CRS=EPSG:4326, scale≈10m(eq), origin=({request['grid']['affineTransform']['translateX']:.3f},{request['grid']['affineTransform']['translateY']:.3f}), size={size}x{size}"
+                    )
+                else:
+                    # Origin (upper-left) from center and 10m pixels
+                    half = (size * 10.0) / 2.0
+                    x0 = float(cx) - half
+                    y0 = float(cy) + half
+                    request = {
+                        'expression': image,
+                        'fileFormat': 'NPY',
+                        'grid': {
+                            'dimensions': { 'width': size, 'height': size },
+                            'affineTransform': {
+                                'scaleX': 10.0,
+                                'scaleY': -10.0,
+                                'translateX': x0,
+                                'translateY': y0,
+                            },
+                            'crsCode': crs_code,
+                        },
+                    }
+                    logger.info(
+                        f"EE grid: CRS={crs_code}, scale=10m, origin=({x0:.2f},{y0:.2f}), size={size}x{size}"
+                    )
+
                 # Make the request
                 pixels_response = ee.data.computePixels(request)
                 
@@ -762,7 +836,8 @@ def fetch_satellite_image(lat, lon, size=IMAGE_SIZE, lidar_path: str = None, spe
                 # Normalize structured arrays returned by computePixels (band-named records) to (C,H,W)
                 if isinstance(data, np.ndarray) and getattr(data, 'dtype', None) is not None and data.dtype.names:
                     try:
-                        bands_order = ['B4', 'B3', 'B2', 'B8', 'B11', 'B12']
+                        # Maintain consistent band order (RGB, NIR, RedEdge B5/B6, SWIR)
+                        bands_order = ['B4', 'B3', 'B2', 'B8', 'B5', 'B6', 'B11', 'B12']
                         available = [b for b in bands_order if b in data.dtype.names]
                         if not available:
                             raise RuntimeError("computePixels returned structured array without expected bands")
@@ -796,12 +871,15 @@ def fetch_satellite_image(lat, lon, size=IMAGE_SIZE, lidar_path: str = None, spe
                         # Single band - expand to 3D as (1, H, W)
                         data = np.expand_dims(data, axis=0).astype(np.float32)
                     
-                    # Normalize to 0-1 range
+                    # Normalize per-band with constant guard
                     for i in range(data.shape[0]):
-                        band_min = np.min(data[i])
-                        band_max = np.max(data[i])
+                        band_min = float(np.nanmin(data[i]))
+                        band_max = float(np.nanmax(data[i]))
                         if band_max > band_min:
                             data[i] = (data[i] - band_min) / (band_max - band_min)
+                        else:
+                            logger.warning(f"Band index {i} appears constant; leaving as NaN for downstream handling")
+                            data[i] = np.nan
                     
                     # Ensure we have NUM_CHANNELS
                     if data.shape[0] < NUM_CHANNELS:
@@ -3414,7 +3492,7 @@ def _normalize_dofa_backbone(name: 'str') -> 'str':
 def load_dofa_segmenter(
     backbone: str = os.environ.get('DOFA_BACKBONE', 'tiny'),
     hub_repo: str = os.environ.get('DOFA_HUB_REPO', 'DofA/DOFA'),
-    local_path: 'str | None' = os.environ.get('DOFA_LOCAL_WEIGHTS'),
+    local_path: 'str | None' = None,
 ) -> 'object':
     """
     Load DOFA segmenter with strict local-weights behavior in production.
@@ -3470,11 +3548,54 @@ def load_dofa_segmenter(
                     probs = _torch.softmax(logits, dim=1)
                 return probs[0].detach().cpu().numpy().astype(_np.float32)
 
+    # Ensure the DOFA hub module is importable when unpickling serialized Modules.
+    # Serialized DOFA backbones may reference the hub file `dofa_v1.py`.
     try:
+        try:
+            import importlib.util as _importlib_util  # type: ignore
+            _spec = _importlib_util.find_spec('dofa_v1')
+        except Exception:
+            _spec = None
+        if _spec is None:
+            try:
+                # Resolve candidate hub cache directories
+                try:
+                    import torch as _torch_tmp  # type: ignore
+                    _hub_base = os.environ.get('TORCH_HUB_DIR') or _torch_tmp.hub.get_dir()
+                except Exception:
+                    _hub_base = os.path.expanduser('~/.cache/torch/hub')
+                _org_repo = str(hub_repo or 'zhu-xlab/DOFA').replace('/', '_')
+                _candidates = [
+                    os.path.join(_hub_base, f'{_org_repo}_master'),
+                    os.path.join(_hub_base, f'{_org_repo}_main'),
+                    os.path.join(_hub_base, _org_repo),
+                    os.path.expanduser('~/.cache/torch/hub/zhu-xlab_DOFA_master'),
+                    os.path.join(os.path.dirname(__file__), 'external', 'DOFA'),
+                ]
+                for _p in _candidates:
+                    if os.path.isdir(_p) and os.path.exists(os.path.join(_p, 'dofa_v1.py')):
+                        if _p not in sys.path:
+                            sys.path.insert(0, _p)
+                        try:
+                            import importlib as _importlib  # type: ignore
+                            _importlib.import_module('dofa_v1')
+                            break
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+    except Exception:
+        # Non-fatal: if this fails, torch.load may still succeed if module is available elsewhere.
+        pass
+
+    try:
+        # Late-bind local_path from environment so callers can set env after import
+        if local_path is None:
+            local_path = os.environ.get('DOFA_LOCAL_WEIGHTS')
         # Enforce local-weights-only in production
         if is_production:
             if not (local_path and os.path.exists(local_path)):
-                raise RuntimeError('DOFA_LOCAL_WEIGHTS not set or file missing')
+                raise RuntimeError('DOFA_LOCAL_WEIGHTS not set or file missing; DOFA_LOCAL_WEIGHTS must point to a serialized torch.nn.Module file')
 
             obj = torch.load(local_path, map_location=device)
             if isinstance(obj, _nn.Module):
@@ -3485,7 +3606,7 @@ def load_dofa_segmenter(
                 # In strict production mode, avoid any potential hub/network usage.
                 # State dicts require constructing the architecture; to keep offline,
                 # require a fully-serialized torch.nn.Module checkpoint.
-                raise RuntimeError('Unsupported DOFA checkpoint format in production; provide a serialized torch.nn.Module')
+                raise RuntimeError('Provide a serialized torch.nn.Module; convert your HF checkpoint first.')
             else:
                 raise RuntimeError('Local DOFA weights must be a torch.nn.Module, {"model": Module}, or a state_dict dict')
         else:
@@ -3512,6 +3633,14 @@ def load_dofa_segmenter(
                     if isinstance(sd, dict):
                         missing, unexpected = model_tmp.load_state_dict(sd, strict=False)
                         logger.info(f"Loaded DOFA state_dict with strict=False; missing={len(missing)}, unexpected={len(unexpected)}")
+                        # Warn if checkpoint likely expects 3 channels
+                        first_conv = None
+                        for k, v in sd.items():
+                            if isinstance(v, _torch.Tensor) and v.ndim == 4:
+                                first_conv = v
+                                break
+                        if first_conv is not None and int(first_conv.shape[1]) == 3 and NUM_CHANNELS != 3:
+                            logger.warning('DOFA checkpoint appears 3-channel; this app uses in_channels=%d. Convert/finetune for production.', NUM_CHANNELS)
                     else:
                         raise RuntimeError('Unsupported DOFA checkpoint format')
                     core = model_tmp
@@ -3538,7 +3667,10 @@ def load_dofa_segmenter(
         model.eval()
         dofa_segmenter = model
         DOFA_AVAILABLE = True
-        logger.info("✅ DOFA segmenter loaded and ready")
+        if local_path:
+            logger.info(f"✅ DOFA segmenter loaded from {local_path}")
+        else:
+            logger.info("✅ DOFA segmenter loaded and ready")
         return dofa_segmenter
     except Exception as e:
         # No online fallbacks in production; keep errors clear and minimal.
@@ -3818,6 +3950,8 @@ def load_trained_model(filepath='archaeological_cnn_model.pth'):
     try:
         checkpoint = torch.load(filepath, map_location=device)
         state = checkpoint.get('model_state_dict', checkpoint)
+        if not isinstance(state, dict):
+            raise RuntimeError('Checkpoint must be a dict or contain model_state_dict')
         keys = list(state.keys())
 
         # Attempt shape-driven dynamic config loading if a JSON config is present alongside
@@ -3840,32 +3974,42 @@ def load_trained_model(filepath='archaeological_cnn_model.pth'):
                         return int(w.shape[1])
             return None
 
-        if any(k.startswith('features.') for k in keys) or any(k.startswith('classifier.') for k in keys):
-            # Improved model path
-            # Try loading from JSON config if available to match structure
-            model = None
-            if cfg_path and os.path.exists(cfg_path):
-                try:
-                    with open(cfg_path, 'r') as f:
-                        cfg = json.load(f)
-                    model = build_residualcnn_from_config_dict(cfg)
-                    # Sanitize state to only matching shapes
+        model = None
+        try:
+            if any(k.startswith('features.') for k in keys) or any(k.startswith('classifier.') for k in keys):
+                # Improved model path with optional JSON config
+                if cfg_path and os.path.exists(cfg_path):
+                    try:
+                        with open(cfg_path, 'r') as f:
+                            cfg = json.load(f)
+                        model = build_residualcnn_from_config_dict(cfg)
+                        ms = model.state_dict()
+                        compatible = {k: v for k, v in state.items() if k in ms and isinstance(v, torch.Tensor) and v.shape == ms[k].shape}
+                        model.load_state_dict(compatible, strict=False)
+                        logger.info("CNN loader: built ResidualCNN from JSON config with strict=False")
+                    except Exception as e:
+                        print(f"⚠️ JSON-config build/load failed: {e}")
+                        model = None
+                if model is None:
+                    # Shape-first generic builder from state tensors
+                    model = build_cnn_from_state_shapes(state)
                     ms = model.state_dict()
                     compatible = {k: v for k, v in state.items() if k in ms and isinstance(v, torch.Tensor) and v.shape == ms[k].shape}
                     model.load_state_dict(compatible, strict=False)
-                except Exception as e:
-                    print(f"⚠️ JSON-config build/load failed: {e}")
-                    model = None
-            if model is None:
-                # Shape-first generic builder from state tensors
-                model = build_cnn_from_state_shapes(state)
-                ms = model.state_dict()
-                compatible = {k: v for k, v in state.items() if k in ms and isinstance(v, torch.Tensor) and v.shape == ms[k].shape}
-                model.load_state_dict(compatible, strict=False)
-        else:
-            # Legacy
-            model = SatelliteAnomalyCNN()
-            model.load_state_dict(state)
+                    logger.info("CNN loader: applied checkpoint tensors (strict=False) onto generic shape-built model")
+            else:
+                # Try legacy class first
+                tmp = SatelliteAnomalyCNN()
+                tmp.load_state_dict(state)
+                model = tmp
+                logger.info("CNN loader: loaded legacy SatelliteAnomalyCNN state strictly")
+        except Exception as e_legacy:
+            # Fallback: generic shape-based builder even without features./classifier. prefixes
+            model = build_cnn_from_state_shapes(state)
+            ms = model.state_dict()
+            compatible = {k: v for k, v in state.items() if k in ms and isinstance(v, torch.Tensor) and v.shape == ms[k].shape}
+            model.load_state_dict(compatible, strict=False)
+            logger.info("CNN loader: fallback to shape-based generic model; applied checkpoint tensors with strict=False")
 
         model.to(device)
         model.eval()

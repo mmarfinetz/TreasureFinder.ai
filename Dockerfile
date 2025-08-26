@@ -56,6 +56,18 @@ RUN set -e; \
       echo "Skipping DOFA weight download (DOFA_WEIGHTS_URL/SHA256 not provided)"; \
     fi
 
+# Optional: download CNN weights at build time
+ARG CNN_WEIGHTS_URL
+ARG CNN_WEIGHTS_SHA256
+RUN set -e; \
+    if [ -n "$CNN_WEIGHTS_URL" ] && [ -n "$CNN_WEIGHTS_SHA256" ]; then \
+      echo "Downloading CNN weights..."; \
+      curl -L -o /app/weights/archaeo_cnn.pth "$CNN_WEIGHTS_URL"; \
+      echo "$CNN_WEIGHTS_SHA256  /app/weights/archaeo_cnn.pth" | sha256sum -c -; \
+    else \
+      echo "Skipping CNN weight download (CNN_WEIGHTS_URL/SHA256 not provided)"; \
+    fi
+
 # Copy application files (except treasure_hunter_module.py initially)
 COPY treasure_api.py .
 COPY gee_lazy_init_patch.py .
@@ -89,7 +101,8 @@ ENV PYTHONUNBUFFERED=1
 ENV DOFA_LOCAL_WEIGHTS=/app/weights/dofa.pth \
     USE_DOFA=true \
     TORCH_HOME=/app/.cache \
-    TORCH_SHOW_DOWNLOAD_PROGRESS=0
+    TORCH_SHOW_DOWNLOAD_PROGRESS=0 \
+    CNN_WEIGHTS_PATH=/app/weights/archaeo_cnn.pth
 
 # Expose port
 EXPOSE 5000

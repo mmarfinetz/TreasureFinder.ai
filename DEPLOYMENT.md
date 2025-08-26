@@ -69,6 +69,30 @@ docker-compose down
   - `--build-arg DOFA_WEIGHTS_SHA256=<sha256>`
 - The Dockerfile creates `/app/.cache` and disables Torch Hub progress logs. No online downloads occur at runtime when `PRODUCTION_MODE=true`.
 
+### CNN Weights (Production)
+
+- Production must not run with an untrained CNN. Provide a local trained weights file and set `CNN_WEIGHTS_PATH`.
+- You may download CNN weights at build time by passing:
+  - `--build-arg CNN_WEIGHTS_URL=<verified URL>`
+  - `--build-arg CNN_WEIGHTS_SHA256=<sha256>`
+- The image sets `CNN_WEIGHTS_PATH=/app/weights/archaeo_cnn.pth` by default.
+
+### DOFA HF → Module Conversion (For Production)
+
+Production requires `DOFA_LOCAL_WEIGHTS` to point to a serialized `torch.nn.Module` file, not a plain `state_dict`.
+
+Convert your HF checkpoint once on a dev machine:
+
+```bash
+python tools/convert_dofa_state_to_module.py \
+  --state /path/to/your_hf_state_dict.pth \
+  --out /abs/path/weights/dofa.pth \
+  --backbone base \
+  --in-channels 8
+```
+
+Then set `DOFA_LOCAL_WEIGHTS=/app/weights/dofa.pth` in production.
+
 ## Cloud Deployments
 
 ### AWS Deployment
