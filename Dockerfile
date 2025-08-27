@@ -60,9 +60,12 @@ RUN set -eu; \
     fi; \
     # If no bundled weights, optionally download if URL+SHA provided
     if [ ! -s "/app/weights/dofa.pth" ]; then \
-      if [ -n "${DOFA_WEIGHTS_URL:-}" ] && [ -n "${DOFA_WEIGHTS_SHA256:-}" ]; then \
+      # Sanitize inputs to avoid accidental trailing characters (e.g., semicolons, quotes, CRLF)
+      SANITIZED_URL=$(printf "%s" "${DOFA_WEIGHTS_URL:-}" | tr -d '\r' | sed -e 's/[[:space:]]*$//' -e 's/[";]*$//'); \
+      SANITIZED_SHA=$(printf "%s" "${DOFA_WEIGHTS_SHA256:-}" | tr -d '\r' | tr -d '[:space:]'); \
+      if [ -n "${SANITIZED_URL}" ] && [ -n "${SANITIZED_SHA}" ]; then \
         echo "Downloading DOFA weights from remote..."; \
-        RESOLVED_URL=$(printf "%s" "${DOFA_WEIGHTS_URL}" | sed 's|/blob/|/resolve/|'); \
+        RESOLVED_URL=$(printf "%s" "${SANITIZED_URL}" | sed 's|/blob/|/resolve/|'); \
         if [ -n "${HF_TOKEN:-}" ]; then \
           curl --retry 5 --retry-delay 5 --retry-all-errors -fSL \
             -H "Authorization: Bearer ${HF_TOKEN}" \
@@ -77,7 +80,7 @@ RUN set -eu; \
           echo "Downloaded DOFA weights file too small (${DOFA_SIZE} bytes). Failing build."; \
           exit 1; \
         fi; \
-        echo "${DOFA_WEIGHTS_SHA256}  /app/weights/dofa.pth" | sha256sum -c -; \
+        echo "${SANITIZED_SHA}  /app/weights/dofa.pth" | sha256sum -c -; \
       else \
         echo "Skipping DOFA weight download (no URL/SHA provided and no bundled file)"; \
       fi; \
