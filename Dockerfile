@@ -38,22 +38,48 @@ ENV PATH=/root/.local/bin:$PATH
 # Prepare cache and weights directories for DOFA
 RUN mkdir -p /app/.cache /app/weights && chmod -R 777 /app/.cache /app/weights
 
-# Optional: download DOFA weights at build time (recommended for production)
-# Provide a verified URL and SHA256 via build args
+# Prefer bundled weights from the repository if present
+# This allows offline builds (e.g., Railway) to succeed without remote downloads
+COPY weights/ /app/weights/
+
+# Optional: download DOFA weights at build time (only if not bundled)
+# Provide URL and SHA256 via build args at deploy time; no defaults
 ARG DOFA_WEIGHTS_URL
 ARG DOFA_WEIGHTS_SHA256
 ARG HF_TOKEN
-RUN set -e; \
-    if [ -n "$DOFA_WEIGHTS_URL" ] && [ -n "$DOFA_WEIGHTS_SHA256" ]; then \
-      echo "Downloading DOFA weights..."; \
-      if [ -n "$HF_TOKEN" ]; then \
-        curl -L -H "Authorization: Bearer $HF_TOKEN" -H "Accept: application/octet-stream" -o /app/weights/dofa.pth "$DOFA_WEIGHTS_URL"; \
-      else \
-        curl -L -o /app/weights/dofa.pth "$DOFA_WEIGHTS_URL"; \
+RUN set -euo pipefail; \
+    # If a bundled weight exists, trust it by default (skip SHA check)
+    if [ -s "/app/weights/dofa.pth" ]; then \
+      DOFA_SIZE=$(stat -c%s /app/weights/dofa.pth || echo 0); \
+      echo "Found bundled DOFA weights (${DOFA_SIZE} bytes). Skipping SHA verification."; \
+      if [ "${DOFA_SIZE}" -lt 1048576 ]; then \
+        echo "Bundled DOFA weights file too small; removing to allow remote download..."; \
+        rm -f /app/weights/dofa.pth; \
       fi; \
-      echo "$DOFA_WEIGHTS_SHA256  /app/weights/dofa.pth" | sha256sum -c -; \
-    else \
-      echo "Skipping DOFA weight download (DOFA_WEIGHTS_URL/SHA256 not provided)"; \
+    fi; \
+    # If no bundled weights, optionally download if URL+SHA provided
+    if [ ! -s "/app/weights/dofa.pth" ]; then \
+      if [ -n "${DOFA_WEIGHTS_URL:-}" ] && [ -n "${DOFA_WEIGHTS_SHA256:-}" ]; then \
+        echo "Downloading DOFA weights from remote..."; \
+        RESOLVED_URL=$(printf "%s" "${DOFA_WEIGHTS_URL}" | sed 's|/blob/|/resolve/|'); \
+        if [ -n "${HF_TOKEN:-}" ]; then \
+          curl --retry 5 --retry-delay 5 --retry-all-errors -fSL \
+            -H "Authorization: Bearer ${HF_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -o /app/weights/dofa.pth "${RESOLVED_URL}"; \
+        else \
+          curl --retry 5 --retry-delay 5 --retry-all-errors -fSL \
+            -o /app/weights/dofa.pth "${RESOLVED_URL}"; \
+        fi; \
+        DOFA_SIZE=$(stat -c%s /app/weights/dofa.pth || echo 0); \
+        if [ "${DOFA_SIZE}" -lt 1048576 ]; then \
+          echo "Downloaded DOFA weights file too small (${DOFA_SIZE} bytes). Failing build."; \
+          exit 1; \
+        fi; \
+        echo "${DOFA_WEIGHTS_SHA256}  /app/weights/dofa.pth" | sha256sum -c -; \
+      else \
+        echo "Skipping DOFA weight download (no URL/SHA provided and no bundled file)"; \
+      fi; \
     fi
 
 # Optional: download CNN weights at build time
@@ -62,7 +88,7 @@ ARG CNN_WEIGHTS_SHA256
 RUN set -e; \
     if [ -n "$CNN_WEIGHTS_URL" ] && [ -n "$CNN_WEIGHTS_SHA256" ]; then \
       echo "Downloading CNN weights..."; \
-      curl -L -o /app/weights/archaeo_cnn.pth "$CNN_WEIGHTS_URL"; \
+      curl -fSL -o /app/weights/archaeo_cnn.pth "$CNN_WEIGHTS_URL"; \
       echo "$CNN_WEIGHTS_SHA256  /app/weights/archaeo_cnn.pth" | sha256sum -c -; \
     else \
       echo "Skipping CNN weight download (CNN_WEIGHTS_URL/SHA256 not provided)"; \
