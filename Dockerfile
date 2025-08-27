@@ -41,7 +41,7 @@ RUN mkdir -p /app/.cache /app/weights && chmod -R 777 /app/.cache /app/weights
 
 # Prefer bundled weights from the repository if present
 # This allows offline builds (e.g., Railway) to succeed without remote downloads
-COPY weights/dofa.pth /app/weights/dofa.pth
+COPY weights/ /app/weights/
 
 # Optional: download DOFA weights at build time (only if not bundled)
 # Provide URL and SHA256 via build args at deploy time; no defaults
