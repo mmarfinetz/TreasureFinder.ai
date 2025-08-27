@@ -33,6 +33,7 @@ logs/
 
 # Model weights: include only the canonical DOFA file
 /weights/*
+!/weights/
 !/weights/dofa.pth
 
 # Misc
