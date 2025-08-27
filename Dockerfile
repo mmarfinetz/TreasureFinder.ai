@@ -48,7 +48,7 @@ COPY weights/ /app/weights/
 ARG DOFA_WEIGHTS_URL
 ARG DOFA_WEIGHTS_SHA256
 ARG HF_TOKEN
-RUN set -euo pipefail; \
+RUN set -eu; \
     # If a bundled weight exists, trust it by default (skip SHA check)
     if [ -s "/app/weights/dofa.pth" ]; then \
       DOFA_SIZE=$(stat -c%s /app/weights/dofa.pth || echo 0); \
@@ -138,7 +138,34 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:${PORT:-5000}/healthz || exit 1
 
-# Run with gunicorn for production, binding to dynamic PORT if provided
-# Use fewer workers by default to fit small-memory hosts like Railway free tier
-# Override via env: WORKERS, THREADS
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers ${WORKERS:-1} --threads ${THREADS:-2} --timeout 300 --log-level info treasure_api:app"]
+# Add a lightweight startup script to handle optional GEE credentials at runtime
+RUN set -eu; \
+    echo '#!/bin/sh' > /app/start.sh; \
+    echo 'set -eu' >> /app/start.sh; \
+    echo '' >> /app/start.sh; \
+    echo 'echo "🚀 Starting TreasureHunter API..."' >> /app/start.sh; \
+    echo '# Decode base64 credentials if provided' >> /app/start.sh; \
+    echo 'if [ -n "${GOOGLE_CREDENTIALS_B64:-}" ]; then' >> /app/start.sh; \
+    echo '  echo "$GOOGLE_CREDENTIALS_B64" | base64 -d > /app/gee_sa.json 2>/dev/null || true' >> /app/start.sh; \
+    echo '  if [ -s /app/gee_sa.json ]; then' >> /app/start.sh; \
+    echo '    export GOOGLE_APPLICATION_CREDENTIALS=/app/gee_sa.json' >> /app/start.sh; \
+    echo '    echo "✅ Set GOOGLE_APPLICATION_CREDENTIALS"' >> /app/start.sh; \
+    echo '  fi' >> /app/start.sh; \
+    echo 'elif [ -n "${GEE_SERVICE_ACCOUNT_JSON:-}" ] && [ ! -f /app/gee_sa.json ]; then' >> /app/start.sh; \
+    echo '  echo "$GEE_SERVICE_ACCOUNT_JSON" > /app/gee_sa.json' >> /app/start.sh; \
+    echo '  export GOOGLE_APPLICATION_CREDENTIALS=/app/gee_sa.json' >> /app/start.sh; \
+    echo '  echo "✅ Set GOOGLE_APPLICATION_CREDENTIALS from JSON"' >> /app/start.sh; \
+    echo 'fi' >> /app/start.sh; \
+    echo '' >> /app/start.sh; \
+    echo 'echo "📊 Env: PORT=${PORT:-5000} WORKERS=${WORKERS:-1} THREADS=${THREADS:-2}"' >> /app/start.sh; \
+    echo 'exec gunicorn \\' >> /app/start.sh; \
+    echo '  --bind 0.0.0.0:${PORT:-5000} \\' >> /app/start.sh; \
+    echo '  --workers ${WORKERS:-1} \\' >> /app/start.sh; \
+    echo '  --threads ${THREADS:-2} \\' >> /app/start.sh; \
+    echo '  --timeout 300 \\' >> /app/start.sh; \
+    echo '  --log-level info \\' >> /app/start.sh; \
+    echo '  treasure_api:app' >> /app/start.sh; \
+    chmod +x /app/start.sh
+
+# Use the startup script as the default command
+CMD ["/app/start.sh"]
