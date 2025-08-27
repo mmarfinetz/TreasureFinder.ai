@@ -110,21 +110,10 @@ COPY convert_notebook.py .
 COPY frontend/ ./frontend/
 # DOFA model definitions
 COPY models/ ./models/
-# Copy notebooks needed for conversion
-COPY TreasurHunter.ipynb .
-COPY satellite.ipynb .
-COPY satellite_300mile.ipynb .
-COPY satellite_production_modular_unified.ipynb .
-
 # Create necessary directories
 RUN mkdir -p saved_models logs
 
-# Convert notebook to module (required for API)
-RUN python convert_notebook.py && \
-    test -f treasure_hunter_module.py || \
-    (echo "ERROR: Failed to generate treasure_hunter_module.py" && exit 1)
-
-# Copy the patched treasure_hunter_module.py to overwrite the auto-generated one
+# Copy pre-converted module directly (skip notebook conversion in CI)
 COPY treasure_hunter_module.py .
 
 # Set environment variables

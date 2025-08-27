@@ -1,0 +1,40 @@
+# VCS and editor files
+.git
+.gitignore
+.DS_Store
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual envs
+.venv/
+venv/
+
+# Logs and reports
+logs/
+*.log
+
+# Tests and local data
+/tests/
+/data/
+/training/
+/metrics/
+
+# Large artifacts not needed at build time
+/saved_models/
+/checkpoints/
+/external/
+/frontend/training_data/
+
+# Notebooks not required for production image
+*.ipynb
+
+# Model weights: include only the canonical DOFA file
+/weights/*
+!/weights/dofa.pth
+
+# Misc
+*.tmp
+*.bak
