@@ -1,8 +1,7 @@
 # Multi-stage build for TreasureHunter production deployment
 # Stage 1: Builder
-# Configurable Python base image (use mirrors to avoid flaky registries)
-ARG PYTHON_BASE=ghcr.io/library/python:3.10-slim
-FROM ${PYTHON_BASE} as builder
+# Pin to Docker Hub official image to ensure anonymous pulls in CI/CD (e.g., Railway)
+FROM docker.io/library/python:3.10-slim as builder
 
 WORKDIR /app
 
@@ -20,7 +19,7 @@ COPY requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
 
 # Stage 2: Production
-FROM ${PYTHON_BASE}
+FROM docker.io/library/python:3.10-slim
 
 WORKDIR /app
 
