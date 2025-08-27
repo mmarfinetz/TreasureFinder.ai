@@ -1,6 +1,7 @@
 # Multi-stage build for TreasureHunter production deployment
 # Stage 1: Builder
-FROM python:3.10-slim as builder
+# Use AWS ECR Public mirror to avoid Cloudflare pull issues on some hosts
+FROM public.ecr.aws/docker/library/python:3.10-slim as builder
 
 WORKDIR /app
 
@@ -18,7 +19,7 @@ COPY requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
 
 # Stage 2: Production
-FROM python:3.10-slim
+FROM public.ecr.aws/docker/library/python:3.10-slim
 
 WORKDIR /app
 
