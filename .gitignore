@@ -27,7 +27,8 @@ saved_models/
 *.ckpt
 *.safetensors
 checkpoints/
-weights/
+weights/*
+!weights/.gitkeep
 
 # Data files
 data/
