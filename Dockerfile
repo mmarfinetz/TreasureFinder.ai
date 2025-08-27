@@ -48,6 +48,7 @@ COPY weights/ /app/weights/
 ARG DOFA_WEIGHTS_URL
 ARG DOFA_WEIGHTS_SHA256
 ARG HF_TOKEN
+ARG SKIP_REMOTE_WEIGHTS=true
 RUN set -eu; \
     # If a bundled weight exists, trust it by default (skip SHA check)
     if [ -s "/app/weights/dofa.pth" ]; then \
@@ -58,8 +59,12 @@ RUN set -eu; \
         rm -f /app/weights/dofa.pth; \
       fi; \
     fi; \
-    # If no bundled weights, optionally download if URL+SHA provided
+    # If no bundled weights, optionally download if URL+SHA provided (unless skipping)
     if [ ! -s "/app/weights/dofa.pth" ]; then \
+      if [ "${SKIP_REMOTE_WEIGHTS:-true}" = "true" ]; then \
+        echo "Skipping remote DOFA download (SKIP_REMOTE_WEIGHTS=true)"; \
+        exit 0; \
+      fi; \
       # Sanitize inputs to avoid accidental trailing characters (e.g., semicolons, quotes, CRLF)
       SANITIZED_URL=$(printf "%s" "${DOFA_WEIGHTS_URL:-}" | tr -d '\r' | sed -e 's/[[:space:]]*$//' -e 's/[";]*$//'); \
       SANITIZED_SHA=$(printf "%s" "${DOFA_WEIGHTS_SHA256:-}" | tr -d '\r' | tr -d '[:space:]'); \
